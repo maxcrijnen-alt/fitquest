@@ -34,6 +34,7 @@ export type Profile = {
   main_goal: MainGoal;
   age: number;
   body_weight_kg: number;
+  onboarding_completed: boolean;
   five_k_goal: string;
   calorie_target: number;
   protein_target: number;
@@ -50,7 +51,7 @@ export type Profile = {
 export type PartnerConnection = {
   id: string;
   requester_id: string;
-  receiver_id: string;
+  receiver_id: string | null;
   status: "pending" | "accepted" | "declined";
   invite_code: string;
   created_at: string;
@@ -185,6 +186,7 @@ export type FitQuestState = {
   rewardPurchases: RewardPurchase[];
   xpTransactions: XpTransaction[];
   encouragements: Encouragement[];
+  partnerSummaries: PartnerSummary[];
 };
 
 export type ExerciseRecord = {
@@ -210,6 +212,13 @@ export type PartnerSummary = {
   weeklyXp: number;
   encouragements: string[];
   milestones: string[];
+  age: number;
+  bodyWeightKg: number;
+  weightClass: string;
+  relativeStrength: number;
+  ageAdjustedStrength: number;
+  ageMultiplier: number;
+  liftCount: number;
 };
 
 export type RelativeStrengthScore = {

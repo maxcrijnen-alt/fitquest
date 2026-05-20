@@ -11,16 +11,40 @@ import { buildPartnerSummary, calculateRelativeStrengthScores, weeklyXp } from "
 const encouragementOptions = ["Nice work!", "Great consistency!", "Strong week!", "Keep going!", "Proud of you!"];
 
 export function FamilyPage() {
-  const { state, profile, connectPartner, sendEncouragement } = useFitQuest();
-  const [invite, setInvite] = useState("father@example.com");
+  const {
+    state,
+    profile,
+    createPartnerInvite,
+    acceptPartnerInvite,
+    sendEncouragement,
+    refreshAccountData,
+  } = useFitQuest();
+  const [invite, setInvite] = useState("");
+  const [latestInviteCode, setLatestInviteCode] = useState("");
   const partner = buildPartnerSummary(state, profile.id);
+  const pendingInvite = state.partnerConnections.find(
+    (connection) => connection.requester_id === profile.id && connection.status === "pending",
+  );
   const relativeStrengthData = partner
-    ? calculateRelativeStrengthScores(state, [profile.id, partner.profile.id])
+    ? [
+        ...calculateRelativeStrengthScores(state, [profile.id]),
+        {
+          userId: partner.profile.id,
+          name: partner.profile.name,
+          age: partner.age,
+          bodyWeightKg: partner.bodyWeightKg,
+          weightClass: partner.weightClass,
+          relativeStrength: partner.relativeStrength,
+          ageAdjustedStrength: partner.ageAdjustedStrength,
+          ageMultiplier: partner.ageMultiplier,
+          liftCount: partner.liftCount,
+        },
+      ]
     : [];
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    connectPartner(invite);
+    await acceptPartnerInvite(invite);
   }
 
   return (
@@ -33,16 +57,53 @@ export function FamilyPage() {
       </div>
 
       {!partner ? (
-        <Card>
-          <h2 className="text-xl font-semibold">Connect one family partner</h2>
-          <form onSubmit={submit} className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <Input value={invite} onChange={(event) => setInvite(event.target.value)} />
-            <PrimaryButton type="submit">
+        <div className="grid gap-6 xl:grid-cols-2">
+          <Card>
+            <h2 className="text-xl font-semibold">Create your invite</h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">
+              Share this code with your family partner. They enter it on their own account to
+              connect.
+            </p>
+            <div className="mt-4 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 p-4">
+              <p className="text-sm font-medium text-zinc-500">Invite code</p>
+              <p className="mt-2 text-2xl font-semibold tracking-normal">
+                {latestInviteCode || pendingInvite?.invite_code || "No code yet"}
+              </p>
+            </div>
+            <PrimaryButton
+              type="button"
+              className="mt-4"
+              onClick={async () => {
+                const code = await createPartnerInvite();
+                if (code) setLatestInviteCode(code);
+              }}
+            >
               <HeartHandshake className="h-4 w-4" aria-hidden="true" />
-              Connect
+              Generate invite
             </PrimaryButton>
-          </form>
-        </Card>
+          </Card>
+
+          <Card>
+            <h2 className="text-xl font-semibold">Accept an invite</h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">
+              Enter your partner&apos;s invite code to create a pending-safe family connection.
+            </p>
+            <form onSubmit={submit} className="mt-4 flex flex-col gap-3 sm:flex-row">
+              <Input
+                value={invite}
+                placeholder="FIT-ABCD-1234"
+                onChange={(event) => setInvite(event.target.value.toUpperCase())}
+              />
+              <PrimaryButton type="submit">
+                <HeartHandshake className="h-4 w-4" aria-hidden="true" />
+                Connect
+              </PrimaryButton>
+            </form>
+            <SecondaryButton type="button" className="mt-3" onClick={() => void refreshAccountData()}>
+              Refresh status
+            </SecondaryButton>
+          </Card>
+        </div>
       ) : (
         <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
           <Card>

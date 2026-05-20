@@ -29,6 +29,7 @@ const profiles: Profile[] = [
     main_goal: "both",
     age: 24,
     body_weight_kg: 75,
+    onboarding_completed: true,
     five_k_goal: "Run a controlled sub-30 minute 5K",
     calorie_target: 2700,
     protein_target: 180,
@@ -51,6 +52,7 @@ const profiles: Profile[] = [
     main_goal: "build muscle",
     age: 60,
     body_weight_kg: 85,
+    onboarding_completed: true,
     five_k_goal: "Complete a relaxed 5K without stopping",
     calorie_target: 2300,
     protein_target: 130,
@@ -259,6 +261,7 @@ export function getDemoState(): FitQuestState {
     rewardPurchases: [],
     xpTransactions,
     encouragements,
+    partnerSummaries: [],
   };
 
   return {

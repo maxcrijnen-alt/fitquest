@@ -148,14 +148,16 @@ export function SettingsPage() {
             <p className="text-sm text-zinc-500">Storage mode</p>
             <p className="mt-1 font-semibold">{supabaseReady ? "Supabase" : "Local demo"}</p>
           </div>
-          <div className="mt-5 grid gap-3">
-            <SecondaryButton type="button" onClick={() => switchDemoUser(advancedUserId)}>
-              Switch to Max
-            </SecondaryButton>
-            <SecondaryButton type="button" onClick={() => switchDemoUser(fatherUserId)}>
-              Switch to Father
-            </SecondaryButton>
-          </div>
+          {!supabaseReady ? (
+            <div className="mt-5 grid gap-3">
+              <SecondaryButton type="button" onClick={() => switchDemoUser(advancedUserId)}>
+                Switch to Max
+              </SecondaryButton>
+              <SecondaryButton type="button" onClick={() => switchDemoUser(fatherUserId)}>
+                Switch to Father
+              </SecondaryButton>
+            </div>
+          ) : null}
         </Card>
       </div>
     </AppShell>

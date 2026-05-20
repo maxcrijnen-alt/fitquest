@@ -31,8 +31,8 @@ The simplest MVP hosting setup is Vercel + Supabase.
 
 1. Push this `fitquest` folder to a GitHub repository.
 2. Create a Supabase project.
-3. Run `supabase/schema.sql` in the Supabase SQL editor.
-4. Optional: run `supabase/seed.sql` for demo baseline data. The seed now starts both users at 0 XP, level 1, 0 coins, and no earned badges.
+3. Run the full contents of `supabase/schema.sql` in the Supabase SQL editor. If you already ran an older version, run the latest file again so the onboarding and invite-code changes are added.
+4. Optional: run `supabase/seed.sql` for demo baseline data. The seed starts both users at 0 XP, level 1, 0 coins, and no earned badges.
 5. In Supabase Auth settings, add your deployed Vercel URL to the allowed redirect URLs.
 6. Create a Vercel project from the GitHub repository.
 7. Add these Vercel environment variables:
@@ -43,7 +43,7 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 ```
 
 8. Deploy. Share the Vercel URL with your father.
-9. Each of you creates an account, completes onboarding, and connects through the family invite/email flow.
+9. Each of you creates an account, completes onboarding, and connects through the family invite-code flow.
 
 For a real shared account setup, do not rely on local demo mode. Demo mode is only for previewing the product on one browser.
 
@@ -64,6 +64,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 4. Add the Supabase URL and anon key to `.env.local`.
 5. Restart the Next.js dev server.
 
+If the app was already connected to Supabase before the invite-code update, rerun the latest `supabase/schema.sql`. The current schema adds:
+
+- `profiles.onboarding_completed`
+- nullable pending invite receivers in `partner_connections`
+- `accept_partner_invite(...)`
+- the privacy-safe partner summary RPC used by the family dashboard
+- explicit API grants for authenticated Supabase users
+
 The schema creates these MVP tables:
 
 - `profiles`
@@ -80,7 +88,7 @@ The schema creates these MVP tables:
 - `xp_transactions`
 - `encouragements`
 
-It also creates `get_partner_summaries()`, a safe summary RPC for partner dashboards.
+It also creates `get_partner_summaries()`, a safe summary RPC for partner dashboards, and `accept_partner_invite(...)`, which lets a logged-in user accept a pending invite code.
 
 ## Database Privacy Rules
 
@@ -90,11 +98,14 @@ RLS is enabled across the app tables.
 - Partners can read connection records involving themselves.
 - Detailed strength, running, nutrition, and alcohol logs are not exposed to partners.
 - Partner summaries are served through `get_partner_summaries()`, which returns only gamified summary fields.
+- Relative strength is shown as a normalized age/bodyweight score, not as exact partner workout logs.
 
 ## MVP Features
 
 - Signup and login with Supabase Auth when configured
 - Local demo mode when Supabase is not configured
+- Mandatory onboarding for real accounts before entering the app
+- Invite-code family connection flow for real accounts
 - Onboarding for name, nickname, goals, gym level, running level, targets, alcohol goal, and workout split
 - Dashboard with tasks, XP, level, streak, coins, badges, PRs, charts, lifestyle summary, partner summary, and coaching
 - Strength logging with volume, estimated 1RM, and PR calculations

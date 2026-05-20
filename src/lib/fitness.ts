@@ -31,7 +31,7 @@ export function timestampNow() {
 
 export function randomId(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return `${prefix}_${crypto.randomUUID()}`;
+    return crypto.randomUUID();
   }
   return `${prefix}_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 }
@@ -165,6 +165,14 @@ export function weeklyXp(state: FitQuestState, userId: string) {
     .reduce((total, transaction) => total + transaction.amount, 0);
 }
 
+export function generateInviteCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const parts = Array.from({ length: 2 }, () =>
+    Array.from({ length: 4 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join(""),
+  );
+  return `FIT-${parts.join("-")}`;
+}
+
 export function getEarnedBadges(state: FitQuestState, userId: string) {
   const earnedIds = new Set(
     state.userBadges.filter((badge) => badge.user_id === userId).map((badge) => badge.badge_id),
@@ -177,9 +185,18 @@ export function generateDailyTasks(profile: Profile, state: FitQuestState, date 
   const workouts = getStrengthWorkouts(state, profile.id);
   const recentRun = runs.at(-1);
   const recentWorkout = workouts.at(-1);
+  const lastMonthWorkouts = workouts.filter((workout) => isWithinLastDays(workout.workout_date, 27));
+  const lastMonthRuns = runs.filter((run) => isWithinLastDays(run.run_date, 27));
+  const averageRecentVolume = lastMonthWorkouts.length
+    ? lastMonthWorkouts.reduce((total, workout) => total + workout.total_volume, 0) / lastMonthWorkouts.length
+    : 0;
+  const longestRecentRun = Math.max(0, ...lastMonthRuns.map((run) => run.distance_km));
   const levelDifficulty = profile.gym_level === "advanced" ? "hard" : profile.gym_level === "intermediate" ? "steady" : "easy";
   const strengthTarget = recentWorkout
-    ? Math.round(recentWorkout.total_volume * (profile.gym_level === "advanced" ? 1.05 : 1.02))
+    ? Math.round(
+        Math.max(recentWorkout.total_volume, averageRecentVolume) *
+          (profile.gym_level === "advanced" ? 1.05 : profile.gym_level === "intermediate" ? 1.03 : 1.01),
+      )
     : profile.gym_level === "advanced"
       ? 9000
       : profile.gym_level === "intermediate"
@@ -187,9 +204,9 @@ export function generateDailyTasks(profile: Profile, state: FitQuestState, date 
         : 1800;
   const runTarget =
     recentRun && recentRun.distance_km >= 5
-      ? Number(Math.min(recentRun.distance_km + 0.25, 7).toFixed(2))
+      ? Number(Math.min(Math.max(recentRun.distance_km, longestRecentRun) + 0.25, 7).toFixed(2))
       : profile.running_level === "cannot run 5K yet"
-        ? 2
+        ? Number(Math.min(Math.max(longestRecentRun + 0.2, 2), 4.8).toFixed(2))
         : 5;
 
   const split = nextSplit(profile.workout_split, workouts);
@@ -331,9 +348,11 @@ export function generateCoachingSummary(profile: Profile, state: FitQuestState):
         : "Alcohol logging is optional, but keeping it visible helps recovery decisions.",
     ],
     strengthSuggestion:
-      recentWorkouts.length >= 3
-        ? "Try increasing total workout volume by about 5% next week if recovery feels good."
-        : `${levelGuidance} A realistic next step is completing the next scheduled split.`,
+      recentWorkouts.length === 0
+        ? `${levelGuidance} Start with one well-controlled strength session before chasing volume.`
+        : recentWorkouts.length >= 3
+          ? "Try increasing total workout volume by about 5% next week if recovery feels good."
+          : `${levelGuidance} A realistic next step is completing the next scheduled split.`,
     runningSuggestion: paceImproved
       ? "Your running pace improved. Your next run can be slightly longer at an easy pace."
       : latestRun
@@ -351,14 +370,19 @@ export function generateCoachingSummary(profile: Profile, state: FitQuestState):
 }
 
 export function buildPartnerSummary(state: FitQuestState, userId: string): PartnerSummary | null {
+  const remoteSummary = state.partnerSummaries[0];
+  if (remoteSummary) return remoteSummary;
+
   const connection = state.partnerConnections.find(
     (item) =>
       item.status === "accepted" && (item.requester_id === userId || item.receiver_id === userId),
   );
   if (!connection) return null;
   const partnerId = connection.requester_id === userId ? connection.receiver_id : connection.requester_id;
+  if (!partnerId) return null;
   const profile = state.profiles.find((item) => item.id === partnerId);
   if (!profile) return null;
+  const relativeStrength = calculateRelativeStrengthScores(state, [partnerId])[0];
 
   return {
     profile,
@@ -373,6 +397,13 @@ export function buildPartnerSummary(state: FitQuestState, userId: string): Partn
       .slice(-4)
       .map((item) => item.message),
     milestones: getRecentMilestones(state, partnerId),
+    age: profile.age,
+    bodyWeightKg: profile.body_weight_kg,
+    weightClass: relativeStrength?.weightClass ?? "Unclassified",
+    relativeStrength: relativeStrength?.relativeStrength ?? 0,
+    ageAdjustedStrength: relativeStrength?.ageAdjustedStrength ?? 0,
+    ageMultiplier: relativeStrength?.ageMultiplier ?? 1,
+    liftCount: relativeStrength?.liftCount ?? 0,
   };
 }
 
@@ -464,6 +495,25 @@ export function calculateRelativeStrengthScores(
       };
     })
     .filter((score): score is RelativeStrengthScore => Boolean(score));
+}
+
+export function calculateRelativeStrengthScoreForProfile(
+  profile: Profile,
+  relativeStrength: number,
+  ageAdjustedStrength?: number,
+): RelativeStrengthScore {
+  const multiplier = ageMultiplier(profile.age);
+  return {
+    userId: profile.id,
+    name: profile.name,
+    age: profile.age,
+    bodyWeightKg: profile.body_weight_kg,
+    weightClass: weightClass(profile.body_weight_kg),
+    relativeStrength,
+    ageAdjustedStrength: ageAdjustedStrength ?? Number((relativeStrength * multiplier).toFixed(1)),
+    ageMultiplier: multiplier,
+    liftCount: 0,
+  };
 }
 
 function ageMultiplier(age: number) {

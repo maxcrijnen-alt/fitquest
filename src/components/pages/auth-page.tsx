@@ -12,9 +12,9 @@ export function AuthPage() {
   const router = useRouter();
   const { signIn, signUp, switchDemoUser, supabaseReady, authError } = useFitQuest();
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [email, setEmail] = useState("max@example.com");
-  const [password, setPassword] = useState("password123");
-  const [name, setName] = useState("Max");
+  const [email, setEmail] = useState(supabaseReady ? "" : "max@example.com");
+  const [password, setPassword] = useState(supabaseReady ? "" : "password123");
+  const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
@@ -103,27 +103,30 @@ export function AuthPage() {
           </p>
           <h1 className="mt-3 text-3xl font-semibold tracking-normal">Two accounts, one shared quest.</h1>
           <p className="mt-4 max-w-xl text-sm leading-6 text-zinc-300">
-            Use Supabase credentials when configured, or open the seeded accounts for a full local
-            MVP preview.
+            {supabaseReady
+              ? "Create your real online account. New users must finish onboarding before using the dashboard."
+              : "Open the seeded accounts for a full local MVP preview."}
           </p>
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <SecondaryButton
-              onClick={() => {
-                switchDemoUser(advancedUserId);
-                router.push("/dashboard");
-              }}
-            >
-              Open Max
-            </SecondaryButton>
-            <SecondaryButton
-              onClick={() => {
-                switchDemoUser(fatherUserId);
-                router.push("/dashboard");
-              }}
-            >
-              Open Father
-            </SecondaryButton>
-          </div>
+          {!supabaseReady ? (
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <SecondaryButton
+                onClick={() => {
+                  switchDemoUser(advancedUserId);
+                  router.push("/dashboard");
+                }}
+              >
+                Open Max
+              </SecondaryButton>
+              <SecondaryButton
+                onClick={() => {
+                  switchDemoUser(fatherUserId);
+                  router.push("/dashboard");
+                }}
+              >
+                Open Father
+              </SecondaryButton>
+            </div>
+          ) : null}
         </Card>
       </section>
     </main>

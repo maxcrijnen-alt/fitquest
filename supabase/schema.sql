@@ -17,6 +17,7 @@ create table if not exists public.profiles (
   main_goal text not null check (main_goal in ('build muscle', 'improve running endurance', 'both')),
   age integer not null default 30 check (age between 12 and 100),
   body_weight_kg numeric(5,2) not null default 80 check (body_weight_kg between 30 and 250),
+  onboarding_completed boolean not null default false,
   five_k_goal text not null default 'Build toward a steady 5K',
   calorie_target integer not null,
   protein_target integer not null,
@@ -32,17 +33,21 @@ create table if not exists public.profiles (
 
 alter table public.profiles
   add column if not exists age integer not null default 30 check (age between 12 and 100),
-  add column if not exists body_weight_kg numeric(5,2) not null default 80 check (body_weight_kg between 30 and 250);
+  add column if not exists body_weight_kg numeric(5,2) not null default 80 check (body_weight_kg between 30 and 250),
+  add column if not exists onboarding_completed boolean not null default false;
 
 create table if not exists public.partner_connections (
   id uuid primary key default gen_random_uuid(),
   requester_id uuid not null references public.profiles(id) on delete cascade,
-  receiver_id uuid not null references public.profiles(id) on delete cascade,
+  receiver_id uuid references public.profiles(id) on delete cascade,
   status text not null default 'pending' check (status in ('pending', 'accepted', 'declined')),
   invite_code text not null unique,
   created_at timestamptz not null default now(),
   constraint partner_connections_not_self check (requester_id <> receiver_id)
 );
+
+alter table public.partner_connections
+  alter column receiver_id drop not null;
 
 create table if not exists public.strength_workouts (
   id uuid primary key default gen_random_uuid(),
@@ -173,6 +178,10 @@ alter table public.reward_purchases enable row level security;
 alter table public.xp_transactions enable row level security;
 alter table public.encouragements enable row level security;
 
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to authenticated;
+grant select on public.badges to anon, authenticated;
+
 drop policy if exists "profiles_own_select" on public.profiles;
 create policy "profiles_own_select" on public.profiles
   for select using (id = auth.uid());
@@ -191,7 +200,7 @@ create policy "partner_connections_visible_to_members" on public.partner_connect
 
 drop policy if exists "partner_connections_insert_by_requester" on public.partner_connections;
 create policy "partner_connections_insert_by_requester" on public.partner_connections
-  for insert with check (requester_id = auth.uid());
+  for insert with check (requester_id = auth.uid() and receiver_id is null);
 
 drop policy if exists "partner_connections_update_by_members" on public.partner_connections;
 create policy "partner_connections_update_by_members" on public.partner_connections
@@ -292,6 +301,36 @@ create policy "encouragements_sender_insert" on public.encouragements
         )
     )
   );
+
+create or replace function public.accept_partner_invite(invite_code_input text)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  accepted_connection_id uuid;
+begin
+  update public.partner_connections
+  set
+    receiver_id = auth.uid(),
+    status = 'accepted'
+  where upper(invite_code) = upper(trim(invite_code_input))
+    and status = 'pending'
+    and requester_id <> auth.uid()
+    and receiver_id is null
+  returning id into accepted_connection_id;
+
+  if accepted_connection_id is null then
+    raise exception 'Invite code is invalid or already used.';
+  end if;
+
+  return accepted_connection_id;
+end;
+$$;
+
+revoke all on function public.accept_partner_invite(text) from public;
+grant execute on function public.accept_partner_invite(text) to authenticated;
 
 create or replace function public.get_partner_summaries()
 returns table (

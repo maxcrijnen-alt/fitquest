@@ -16,6 +16,7 @@ import {
   calculatePersonalRecords,
   calculateWorkoutVolume,
   estimatedOneRepMax,
+  generateInviteCode,
   generateDailyTasks,
   getProfile,
   levelFromXp,
@@ -25,9 +26,12 @@ import {
 } from "@/lib/fitness";
 import { createSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase/client";
 import {
+  Badge,
   DailyLifestyleLog,
   FitQuestState,
   MainGoal,
+  PartnerConnection,
+  PartnerSummary,
   Profile,
   RunningLevel,
   RunningWorkout,
@@ -63,11 +67,18 @@ type OnboardingInput = Pick<
   | "workout_split"
 >;
 
+type AuthStatus = "loading" | "authenticated" | "anonymous" | "demo";
+type AppNotice = { tone: "success" | "error" | "info"; message: string } | null;
+
 type FitQuestContextValue = {
   state: FitQuestState;
   profile: Profile;
   supabaseReady: boolean;
+  authStatus: AuthStatus;
+  isDemoMode: boolean;
   authError: string | null;
+  notice: AppNotice;
+  clearNotice: () => void;
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string, name: string) => Promise<boolean>;
   signOut: () => Promise<void>;
@@ -96,20 +107,25 @@ type FitQuestContextValue = {
   createReward: (input: { title: string; description: string; coin_cost: number }) => void;
   purchaseReward: (rewardId: string) => void;
   sendEncouragement: (receiverId: string, message: string) => void;
-  connectPartner: (emailOrCode: string) => void;
+  createPartnerInvite: () => Promise<string | null>;
+  acceptPartnerInvite: (inviteCode: string) => Promise<boolean>;
+  refreshAccountData: () => Promise<void>;
 };
 
 const STORAGE_KEY = "fitquest.mvp.state.v2";
 const FitQuestContext = createContext<FitQuestContextValue | null>(null);
 
 export function FitQuestProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<FitQuestState>(() => ensureTodayTasks(getDemoState()));
-  const [authError, setAuthError] = useState<string | null>(null);
-  const localStorageLoaded = useRef(false);
   const supabase = useMemo(() => createSupabaseBrowserClient(), []);
   const supabaseReady = isSupabaseConfigured();
+  const [state, setState] = useState<FitQuestState>(() => ensureTodayTasks(getDemoState()));
+  const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (supabaseReady ? "loading" : "demo"));
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<AppNotice>(null);
+  const localStorageLoaded = useRef(false);
 
   useEffect(() => {
+    if (supabaseReady) return;
     const timer = window.setTimeout(() => {
       const saved = window.localStorage.getItem(STORAGE_KEY);
       localStorageLoaded.current = true;
@@ -124,17 +140,19 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [supabaseReady]);
 
   useEffect(() => {
+    if (supabaseReady) return;
     if (!localStorageLoaded.current) return;
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+  }, [state, supabaseReady]);
 
   useEffect(() => {
     if (!supabase) return;
+    if (authStatus !== "authenticated") return;
     void syncOwnedSupabaseState(supabase, state, state.currentUserId);
-  }, [state, supabase]);
+  }, [authStatus, state, supabase]);
 
   const profile = getProfile(state);
 
@@ -159,11 +177,13 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         lifestyleResponse,
         tasksResponse,
         rewardsResponse,
+        rewardPurchasesResponse,
         badgesResponse,
         userBadgesResponse,
         xpResponse,
         connectionsResponse,
         encouragementsResponse,
+        partnerSummariesResponse,
       ] = await Promise.all([
         supabase.from("strength_workouts").select("*").eq("user_id", userId),
         supabase.from("strength_exercises").select("*, strength_workouts!inner(user_id)").eq("strength_workouts.user_id", userId),
@@ -171,6 +191,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         supabase.from("daily_lifestyle_logs").select("*").eq("user_id", userId),
         supabase.from("tasks").select("*").eq("user_id", userId),
         supabase.from("rewards").select("*").eq("user_id", userId),
+        supabase.from("reward_purchases").select("*").eq("user_id", userId),
         supabase.from("badges").select("*"),
         supabase.from("user_badges").select("*").eq("user_id", userId),
         supabase.from("xp_transactions").select("*").eq("user_id", userId),
@@ -182,58 +203,38 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
           .from("encouragements")
           .select("*")
           .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`),
+        supabase.rpc("get_partner_summaries"),
       ]);
 
       setState((previous) => {
+        const badges = badgesResponse.data?.length
+          ? (badgesResponse.data as Badge[])
+          : previous.badges;
+        const connections = (connectionsResponse.data as PartnerConnection[] | null) ?? [];
+        const partnerSummaries = mapPartnerSummaries(
+          (partnerSummariesResponse.data as PartnerSummaryRpcRow[] | null) ?? [],
+          badges,
+        );
         const next = {
-          ...previous,
           currentUserId: userId,
-          profiles: upsertById(previous.profiles, remoteProfile),
-          strengthWorkouts: replaceMine(
-            previous.strengthWorkouts,
-            userId,
-            (strengthWorkoutsResponse.data as StrengthWorkout[] | null) ?? [],
-          ),
-          strengthExercises: mergeExercises(
-            previous.strengthExercises,
+          profiles: [remoteProfile, ...partnerSummaries.map((summary) => summary.profile)],
+          partnerConnections: connections,
+          strengthWorkouts: (strengthWorkoutsResponse.data as StrengthWorkout[] | null) ?? [],
+          strengthExercises: stripJoinedWorkout(
             (exercisesResponse.data as (StrengthExercise & { strength_workouts?: unknown })[] | null) ?? [],
           ),
-          runningWorkouts: replaceMine(
-            previous.runningWorkouts,
-            userId,
-            (runsResponse.data as RunningWorkout[] | null) ?? [],
-          ),
-          dailyLifestyleLogs: replaceMine(
-            previous.dailyLifestyleLogs,
-            userId,
-            (lifestyleResponse.data as DailyLifestyleLog[] | null) ?? [],
-          ),
-          tasks: replaceMine(previous.tasks, userId, (tasksResponse.data as Task[] | null) ?? []),
-          rewards: replaceMine(
-            previous.rewards,
-            userId,
-            (rewardsResponse.data as FitQuestState["rewards"] | null) ?? [],
-          ),
-          badges: badgesResponse.data?.length
-            ? (badgesResponse.data as FitQuestState["badges"])
-            : previous.badges,
-          userBadges: replaceMine(
-            previous.userBadges,
-            userId,
-            (userBadgesResponse.data as FitQuestState["userBadges"] | null) ?? [],
-          ),
-          xpTransactions: replaceMine(
-            previous.xpTransactions,
-            userId,
-            (xpResponse.data as FitQuestState["xpTransactions"] | null) ?? [],
-          ),
-          partnerConnections: connectionsResponse.data?.length
-            ? (connectionsResponse.data as FitQuestState["partnerConnections"])
-            : previous.partnerConnections,
-          encouragements: encouragementsResponse.data?.length
-            ? (encouragementsResponse.data as FitQuestState["encouragements"])
-            : previous.encouragements,
-        };
+          runningWorkouts: (runsResponse.data as RunningWorkout[] | null) ?? [],
+          dailyLifestyleLogs: (lifestyleResponse.data as DailyLifestyleLog[] | null) ?? [],
+          tasks: (tasksResponse.data as Task[] | null) ?? [],
+          badges,
+          userBadges: (userBadgesResponse.data as FitQuestState["userBadges"] | null) ?? [],
+          rewards: (rewardsResponse.data as FitQuestState["rewards"] | null) ?? [],
+          rewardPurchases: (rewardPurchasesResponse.data as FitQuestState["rewardPurchases"] | null) ?? [],
+          xpTransactions: (xpResponse.data as FitQuestState["xpTransactions"] | null) ?? [],
+          encouragements: (encouragementsResponse.data as FitQuestState["encouragements"] | null) ?? [],
+          partnerSummaries,
+        } satisfies FitQuestState;
+        setAuthStatus("authenticated");
         return ensureTodayTasks(next, userId);
       });
     },
@@ -244,7 +245,10 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
     if (!supabase) return;
     void supabase.auth.getSession().then(({ data }) => {
       const user = data.session?.user;
-      if (!user) return;
+      if (!user) {
+        setAuthStatus("anonymous");
+        return;
+      }
       void loadSupabaseProfile(user.id, user.email ?? "user@example.com");
     });
 
@@ -252,7 +256,10 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       if (session?.user) {
+        setAuthStatus("loading");
         void loadSupabaseProfile(session.user.id, session.user.email ?? "user@example.com");
+      } else {
+        setAuthStatus("anonymous");
       }
     });
 
@@ -271,8 +278,10 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         return true;
       }
 
+      setAuthStatus("loading");
       const { data, error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
+        setAuthStatus("anonymous");
         setAuthError(error.message);
         return false;
       }
@@ -296,12 +305,14 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         return true;
       }
 
+      setAuthStatus("loading");
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
         options: { data: { name } },
       });
       if (error) {
+        setAuthStatus("anonymous");
         setAuthError(error.message);
         return false;
       }
@@ -309,11 +320,12 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         const newProfile = createDefaultProfile(data.user.id, data.user.email ?? email, name);
         await supabase.from("profiles").upsert(newProfile);
         setState((previous) => ({
-          ...previous,
+          ...emptyState(newProfile.id, previous.badges),
           currentUserId: newProfile.id,
-          profiles: upsertById(previous.profiles, newProfile),
-          tasks: [...previous.tasks, ...generateDailyTasks(newProfile, previous)],
+          profiles: [newProfile],
+          tasks: generateDailyTasks(newProfile, emptyState(newProfile.id, previous.badges)),
         }));
+        setAuthStatus("authenticated");
       }
       return true;
     },
@@ -322,8 +334,9 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     if (supabase) await supabase.auth.signOut();
+    setAuthStatus(supabaseReady ? "anonymous" : "demo");
     setState((previous) => ensureTodayTasks({ ...previous, currentUserId: previous.profiles[0].id }));
-  }, [supabase]);
+  }, [supabase, supabaseReady]);
 
   const switchDemoUser = useCallback((userId: string) => {
     setState((previous) => ensureTodayTasks({ ...previous, currentUserId: userId }));
@@ -332,8 +345,9 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
   const updateOnboarding = useCallback(
     (input: OnboardingInput) => {
       setState((previous) => {
-        const updatedProfile = { ...getProfile(previous), ...input };
+        const updatedProfile = { ...getProfile(previous), ...input, onboarding_completed: true };
         void syncTable(supabase, "profiles", updatedProfile);
+        setNotice({ tone: "success", message: "Profile and goals saved." });
         return {
           ...previous,
           profiles: upsertById(previous.profiles, updatedProfile),
@@ -347,6 +361,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
     setState((previous) => {
       const next = cloneState(previous);
       completeTasks(next, previous.currentUserId, (task) => task.id === taskId);
+      setNotice({ tone: "success", message: "Task completed. XP added." });
       return next;
     });
   }, []);
@@ -400,6 +415,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         applyLevelBadges(next, profile.id);
         void syncTable(supabase, "strength_workouts", workout);
         if (exercises.length) void syncTable(supabase, "strength_exercises", exercises);
+        setNotice({ tone: "success", message: "Strength workout saved." });
         return next;
       });
     },
@@ -427,6 +443,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         if (run.distance_km >= 5) awardBadge(next, userId, "first_5k");
         applyLevelBadges(next, userId);
         void syncTable(supabase, "running_workouts", run);
+        setNotice({ tone: "success", message: "Run saved." });
         return next;
       });
     },
@@ -479,6 +496,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         }
         applyLevelBadges(next, userId);
         void syncTable(supabase, "daily_lifestyle_logs", log);
+        setNotice({ tone: "success", message: "Lifestyle log saved." });
         return next;
       });
     },
@@ -495,6 +513,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
           created_at: timestampNow(),
         };
         void syncTable(supabase, "rewards", reward);
+        setNotice({ tone: "success", message: "Reward created." });
         return { ...previous, rewards: [...previous.rewards, reward] };
       });
     },
@@ -506,7 +525,10 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
       setState((previous) => {
         const reward = previous.rewards.find((item) => item.id === rewardId);
         const profile = getProfile(previous);
-        if (!reward || reward.coin_cost > profile.coins) return previous;
+        if (!reward || reward.coin_cost > profile.coins) {
+          setNotice({ tone: "error", message: "Not enough coins for that reward yet." });
+          return previous;
+        }
 
         const purchase = {
           id: randomId("purchase"),
@@ -517,6 +539,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         const updatedProfile = { ...profile, coins: profile.coins - reward.coin_cost };
         void syncTable(supabase, "profiles", updatedProfile);
         void syncTable(supabase, "reward_purchases", purchase);
+        setNotice({ tone: "success", message: "Reward purchased." });
         return {
           ...previous,
           profiles: upsertById(previous.profiles, updatedProfile),
@@ -538,56 +561,115 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
           created_at: timestampNow(),
         };
         void syncTable(supabase, "encouragements", encouragement);
+        setNotice({ tone: "success", message: "Encouragement sent." });
         return { ...previous, encouragements: [...previous.encouragements, encouragement] };
       });
     },
     [supabase],
   );
 
-  const connectPartner = useCallback(
-    (emailOrCode: string) => {
+  const createPartnerInvite = useCallback(async () => {
+    const current = getProfile(state);
+    const existingPending = state.partnerConnections.find(
+      (connection) => connection.requester_id === current.id && connection.status === "pending",
+    );
+    if (existingPending) {
+      setNotice({ tone: "info", message: "Existing invite code is ready to share." });
+      return existingPending.invite_code;
+    }
+
+    const code = generateInviteCode();
+    const connection: PartnerConnection = {
+      id: randomId("partner"),
+      requester_id: current.id,
+      receiver_id: null,
+      status: "pending",
+      invite_code: code,
+      created_at: timestampNow(),
+    };
+
+    if (supabase) {
+      const { error } = await supabase.from("partner_connections").insert(connection as never);
+      if (error) {
+        setNotice({ tone: "error", message: error.message });
+        return null;
+      }
+    }
+
+    setState((previous) => ({
+      ...previous,
+      partnerConnections: [...previous.partnerConnections, connection],
+    }));
+    setNotice({ tone: "success", message: "Invite code created." });
+    return code;
+  }, [state, supabase]);
+
+  const acceptPartnerInvite = useCallback(
+    async (inviteCode: string) => {
+      const normalizedCode = inviteCode.trim().toUpperCase();
+      if (!normalizedCode) {
+        setNotice({ tone: "error", message: "Enter an invite code first." });
+        return false;
+      }
+
+      if (supabase) {
+        const { error } = await supabase.rpc("accept_partner_invite", {
+          invite_code_input: normalizedCode,
+        });
+        if (error) {
+          setNotice({ tone: "error", message: error.message });
+          return false;
+        }
+        await loadSupabaseProfile(profile.id, profile.email);
+        setNotice({ tone: "success", message: "Family partner connected." });
+        return true;
+      }
+
+      let connected = false;
       setState((previous) => {
         const current = getProfile(previous);
-        const partner = previous.profiles.find(
-          (item) =>
-            item.id !== current.id &&
-            (item.email.toLowerCase() === emailOrCode.toLowerCase() ||
-              previous.partnerConnections.some(
-                (connection) =>
-                  connection.invite_code.toLowerCase() === emailOrCode.toLowerCase() &&
-                  (connection.requester_id === item.id || connection.receiver_id === item.id),
-              )),
-        );
-        if (!partner) return previous;
-        const exists = previous.partnerConnections.some(
+        const pending = previous.partnerConnections.find(
           (connection) =>
-            connection.status === "accepted" &&
-            (connection.requester_id === current.id || connection.receiver_id === current.id),
+            connection.status === "pending" &&
+            connection.requester_id !== current.id &&
+            connection.invite_code.toUpperCase() === normalizedCode,
         );
-        if (exists) return previous;
-        const connection = {
-          id: randomId("partner"),
-          requester_id: current.id,
-          receiver_id: partner.id,
-          status: "accepted" as const,
-          invite_code: `FIT-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-          created_at: timestampNow(),
-        };
-        void syncTable(supabase, "partner_connections", connection);
+        if (!pending) return previous;
+        connected = true;
         return {
           ...previous,
-          partnerConnections: [...previous.partnerConnections, connection],
+          partnerConnections: previous.partnerConnections.map((connection) =>
+            connection.id === pending.id
+              ? { ...connection, receiver_id: current.id, status: "accepted" }
+              : connection,
+          ),
         };
       });
+      setNotice(
+        connected
+          ? { tone: "success", message: "Family partner connected." }
+          : { tone: "error", message: "Invite code not found." },
+      );
+      return connected;
     },
-    [supabase],
+    [loadSupabaseProfile, profile.email, profile.id, supabase],
   );
+
+  const refreshAccountData = useCallback(async () => {
+    if (!supabase) return;
+    await loadSupabaseProfile(profile.id, profile.email);
+    setNotice({ tone: "success", message: "Account data refreshed." });
+  }, [loadSupabaseProfile, profile.email, profile.id, supabase]);
 
   const value: FitQuestContextValue = {
     state,
     profile,
     supabaseReady,
+    authStatus,
+    isDemoMode: authStatus === "demo",
     authError,
+    notice,
+    clearNotice: () => setNotice(null),
     signIn,
     signUp,
     signOut,
@@ -600,7 +682,9 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
     createReward,
     purchaseReward,
     sendEncouragement,
-    connectPartner,
+    createPartnerInvite,
+    acceptPartnerInvite,
+    refreshAccountData,
   };
 
   return <FitQuestContext.Provider value={value}>{children}</FitQuestContext.Provider>;
@@ -623,6 +707,7 @@ function createDefaultProfile(id: string, email: string, name = "FitQuest User")
     main_goal: "both" as MainGoal,
     age: 30,
     body_weight_kg: 80,
+    onboarding_completed: false,
     five_k_goal: "Build toward a steady 5K",
     calorie_target: 2300,
     protein_target: 130,
@@ -634,6 +719,26 @@ function createDefaultProfile(id: string, email: string, name = "FitQuest User")
     coins: 0,
     current_streak: 0,
     created_at: timestampNow(),
+  };
+}
+
+function emptyState(currentUserId: string, badges: Badge[] = []): FitQuestState {
+  return {
+    currentUserId,
+    profiles: [],
+    partnerConnections: [],
+    strengthWorkouts: [],
+    strengthExercises: [],
+    runningWorkouts: [],
+    dailyLifestyleLogs: [],
+    tasks: [],
+    badges,
+    userBadges: [],
+    rewards: [],
+    rewardPurchases: [],
+    xpTransactions: [],
+    encouragements: [],
+    partnerSummaries: [],
   };
 }
 
@@ -653,7 +758,73 @@ function cloneState(state: FitQuestState): FitQuestState {
     rewardPurchases: [...state.rewardPurchases],
     xpTransactions: [...state.xpTransactions],
     encouragements: [...state.encouragements],
+    partnerSummaries: [...state.partnerSummaries],
   };
+}
+
+type PartnerSummaryRpcRow = {
+  profile_id: string;
+  name: string;
+  nickname: string;
+  xp: number;
+  level: number;
+  coins: number;
+  current_streak: number;
+  weekly_completion: number;
+  weekly_xp: number;
+  age: number;
+  body_weight_kg: number;
+  weight_class: string;
+  relative_strength_index: number;
+  age_adjusted_strength_index: number;
+  badges: { name: string; description: string; icon: string }[] | null;
+  recent_milestones: string[] | null;
+  encouragement_messages: string[] | null;
+};
+
+function mapPartnerSummaries(rows: PartnerSummaryRpcRow[], knownBadges: Badge[]): PartnerSummary[] {
+  return rows.map((row) => {
+    const profile = createDefaultProfile(row.profile_id, "partner@example.com", row.name);
+    profile.nickname = row.nickname;
+    profile.xp = row.xp;
+    profile.level = row.level;
+    profile.coins = row.coins;
+    profile.current_streak = row.current_streak;
+    profile.age = row.age;
+    profile.body_weight_kg = Number(row.body_weight_kg);
+    profile.onboarding_completed = true;
+
+    const badges = (row.badges ?? []).map((badge, index) => ({
+      id:
+        knownBadges.find((knownBadge) => knownBadge.name === badge.name)?.id ??
+        `summary-badge-${row.profile_id}-${index}`,
+      name: badge.name,
+      description: badge.description,
+      icon: badge.icon,
+      condition_type:
+        knownBadges.find((knownBadge) => knownBadge.name === badge.name)?.condition_type ??
+        badge.name.toLowerCase().replaceAll(" ", "_"),
+    }));
+
+    return {
+      profile,
+      xp: row.xp,
+      level: row.level,
+      badges,
+      streak: row.current_streak,
+      weeklyCompletion: Number(row.weekly_completion),
+      weeklyXp: row.weekly_xp,
+      encouragements: row.encouragement_messages ?? [],
+      milestones: row.recent_milestones ?? [],
+      age: row.age,
+      bodyWeightKg: Number(row.body_weight_kg),
+      weightClass: row.weight_class,
+      relativeStrength: Number(row.relative_strength_index),
+      ageAdjustedStrength: Number(row.age_adjusted_strength_index),
+      ageMultiplier: row.age >= 70 ? 1.42 : row.age >= 60 ? 1.28 : row.age >= 50 ? 1.16 : row.age >= 40 ? 1.07 : 1,
+      liftCount: 0,
+    };
+  });
 }
 
 function completeTasks(next: FitQuestState, userId: string, matcher: (task: Task) => boolean) {
@@ -739,10 +910,6 @@ function upsertById<T extends { id: string }>(items: T[], item: T) {
   return items.map((existing) => (existing.id === item.id ? item : existing));
 }
 
-function replaceMine<T extends { user_id: string }>(items: T[], userId: string, mine: T[]) {
-  return [...items.filter((item) => item.user_id !== userId), ...mine];
-}
-
 function ensureTodayTasks(state: FitQuestState, userId = state.currentUserId) {
   const profile = getProfile(state, userId);
   const hasToday = state.tasks.some(
@@ -755,14 +922,12 @@ function ensureTodayTasks(state: FitQuestState, userId = state.currentUserId) {
   };
 }
 
-function mergeExercises(items: StrengthExercise[], remoteItems: (StrengthExercise & { strength_workouts?: unknown })[]) {
-  const cleaned = remoteItems.map((remoteItem) => {
+function stripJoinedWorkout(remoteItems: (StrengthExercise & { strength_workouts?: unknown })[]) {
+  return remoteItems.map((remoteItem) => {
     const item = { ...remoteItem };
     delete item.strength_workouts;
     return item;
   });
-  const remoteIds = new Set(cleaned.map((item) => item.id));
-  return [...items.filter((item) => !remoteIds.has(item.id)), ...cleaned];
 }
 
 async function syncTable<T>(supabase: ReturnType<typeof createSupabaseBrowserClient>, table: string, payload: T) {
