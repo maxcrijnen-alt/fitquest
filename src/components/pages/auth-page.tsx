@@ -16,6 +16,7 @@ export function AuthPage() {
   const [password, setPassword] = useState(supabaseReady ? "" : "password123");
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const authErrorIsEmailLimit = authError?.toLowerCase().includes("signup emails");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -84,9 +85,15 @@ export function AuthPage() {
               />
             </label>
             {authError ? (
-              <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-                {authError}
-              </p>
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                <p>{authError}</p>
+                {authErrorIsEmailLimit ? (
+                  <p className="mt-2 text-rose-800">
+                    Supabase Dashboard: Authentication, Providers, Email, then turn off Confirm email.
+                    After that, create the account again or log in if it already exists.
+                  </p>
+                ) : null}
+              </div>
             ) : notice ? (
               <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {notice.message}

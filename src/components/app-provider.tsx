@@ -274,7 +274,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         setAuthError(null);
         setAuthStatus("authenticated");
       } catch (error) {
-        setAuthError(readErrorMessage(error));
+        setAuthError(formatAuthError(readErrorMessage(error)));
         setAuthStatus("error");
       }
     },
@@ -298,7 +298,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
       }
       await loadSupabaseProfile(user.id, user.email ?? "user@example.com");
     } catch (error) {
-      setAuthError(readErrorMessage(error));
+      setAuthError(formatAuthError(readErrorMessage(error)));
       setAuthStatus("error");
     }
   }, [loadSupabaseProfile, supabase]);
@@ -350,14 +350,14 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         );
         if (error) {
           setAuthStatus("anonymous");
-          setAuthError(error.message);
+          setAuthError(formatAuthError(error.message));
           return false;
         }
         if (data.user) await loadSupabaseProfile(data.user.id, data.user.email ?? email);
         return true;
       } catch (error) {
         setAuthStatus("anonymous");
-        setAuthError(readErrorMessage(error));
+        setAuthError(formatAuthError(readErrorMessage(error)));
         return false;
       }
     },
@@ -390,7 +390,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         );
         if (error) {
           setAuthStatus("anonymous");
-          setAuthError(error.message);
+          setAuthError(formatAuthError(error.message));
           return false;
         }
         if (data.user && data.session) {
@@ -415,7 +415,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         return false;
       } catch (error) {
         setAuthStatus("anonymous");
-        setAuthError(readErrorMessage(error));
+        setAuthError(formatAuthError(readErrorMessage(error)));
         return false;
       }
     },
@@ -1095,4 +1095,15 @@ function throwIfSupabaseError(response: unknown, label: string) {
 
 function readErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong while loading FitQuest.";
+}
+
+function formatAuthError(message: string) {
+  const lowerMessage = message.toLowerCase();
+  if (lowerMessage.includes("rate limit") && lowerMessage.includes("email")) {
+    return "Supabase has temporarily blocked more signup emails. For this MVP, disable Confirm email in Supabase Auth, or wait for the email limit to reset and try again.";
+  }
+  if (lowerMessage.includes("email not confirmed")) {
+    return "This account still needs email confirmation. Check your inbox, or disable Confirm email in Supabase Auth for the MVP.";
+  }
+  return message;
 }
