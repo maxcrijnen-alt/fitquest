@@ -10,7 +10,7 @@ import { Card, Input, PrimaryButton, SecondaryButton } from "@/components/ui";
 
 export function AuthPage() {
   const router = useRouter();
-  const { signIn, signUp, switchDemoUser, supabaseReady, authError } = useFitQuest();
+  const { signIn, signUp, switchDemoUser, supabaseReady, authError, notice } = useFitQuest();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState(supabaseReady ? "" : "max@example.com");
   const [password, setPassword] = useState(supabaseReady ? "" : "password123");
@@ -86,6 +86,10 @@ export function AuthPage() {
             {authError ? (
               <p className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {authError}
+              </p>
+            ) : notice ? (
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {notice.message}
               </p>
             ) : null}
             <PrimaryButton type="submit" disabled={submitting} className="w-full">

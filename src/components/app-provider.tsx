@@ -67,7 +67,7 @@ type OnboardingInput = Pick<
   | "workout_split"
 >;
 
-type AuthStatus = "loading" | "authenticated" | "anonymous" | "demo";
+type AuthStatus = "loading" | "authenticated" | "anonymous" | "demo" | "error";
 type AppNotice = { tone: "success" | "error" | "info"; message: string } | null;
 
 type FitQuestContextValue = {
@@ -110,9 +110,11 @@ type FitQuestContextValue = {
   createPartnerInvite: () => Promise<string | null>;
   acceptPartnerInvite: (inviteCode: string) => Promise<boolean>;
   refreshAccountData: () => Promise<void>;
+  retryAuthLoad: () => Promise<void>;
 };
 
 const STORAGE_KEY = "fitquest.mvp.state.v2";
+const AUTH_LOAD_TIMEOUT_MS = 12000;
 const FitQuestContext = createContext<FitQuestContextValue | null>(null);
 
 export function FitQuestProvider({ children }: { children: ReactNode }) {
@@ -159,112 +161,174 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
   const loadSupabaseProfile = useCallback(
     async (userId: string, email: string) => {
       if (!supabase) return;
-      const { data: profileRow } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", userId)
-        .maybeSingle();
-
-      const remoteProfile = (profileRow as Profile | null) ?? createDefaultProfile(userId, email);
-      if (!profileRow) {
-        await supabase.from("profiles").upsert(remoteProfile);
-      }
-
-      const [
-        strengthWorkoutsResponse,
-        exercisesResponse,
-        runsResponse,
-        lifestyleResponse,
-        tasksResponse,
-        rewardsResponse,
-        rewardPurchasesResponse,
-        badgesResponse,
-        userBadgesResponse,
-        xpResponse,
-        connectionsResponse,
-        encouragementsResponse,
-        partnerSummariesResponse,
-      ] = await Promise.all([
-        supabase.from("strength_workouts").select("*").eq("user_id", userId),
-        supabase.from("strength_exercises").select("*, strength_workouts!inner(user_id)").eq("strength_workouts.user_id", userId),
-        supabase.from("running_workouts").select("*").eq("user_id", userId),
-        supabase.from("daily_lifestyle_logs").select("*").eq("user_id", userId),
-        supabase.from("tasks").select("*").eq("user_id", userId),
-        supabase.from("rewards").select("*").eq("user_id", userId),
-        supabase.from("reward_purchases").select("*").eq("user_id", userId),
-        supabase.from("badges").select("*"),
-        supabase.from("user_badges").select("*").eq("user_id", userId),
-        supabase.from("xp_transactions").select("*").eq("user_id", userId),
-        supabase
-          .from("partner_connections")
-          .select("*")
-          .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
-        supabase
-          .from("encouragements")
-          .select("*")
-          .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`),
-        supabase.rpc("get_partner_summaries"),
-      ]);
-
-      setState((previous) => {
-        const badges = badgesResponse.data?.length
-          ? (badgesResponse.data as Badge[])
-          : previous.badges;
-        const connections = (connectionsResponse.data as PartnerConnection[] | null) ?? [];
-        const partnerSummaries = mapPartnerSummaries(
-          (partnerSummariesResponse.data as PartnerSummaryRpcRow[] | null) ?? [],
-          badges,
+      try {
+        const profileResponse = await withTimeout(
+          supabase.from("profiles").select("*").eq("id", userId).maybeSingle(),
+          "Loading your profile took too long.",
         );
-        const next = {
-          currentUserId: userId,
-          profiles: [remoteProfile, ...partnerSummaries.map((summary) => summary.profile)],
-          partnerConnections: connections,
-          strengthWorkouts: (strengthWorkoutsResponse.data as StrengthWorkout[] | null) ?? [],
-          strengthExercises: stripJoinedWorkout(
-            (exercisesResponse.data as (StrengthExercise & { strength_workouts?: unknown })[] | null) ?? [],
-          ),
-          runningWorkouts: (runsResponse.data as RunningWorkout[] | null) ?? [],
-          dailyLifestyleLogs: (lifestyleResponse.data as DailyLifestyleLog[] | null) ?? [],
-          tasks: (tasksResponse.data as Task[] | null) ?? [],
-          badges,
-          userBadges: (userBadgesResponse.data as FitQuestState["userBadges"] | null) ?? [],
-          rewards: (rewardsResponse.data as FitQuestState["rewards"] | null) ?? [],
-          rewardPurchases: (rewardPurchasesResponse.data as FitQuestState["rewardPurchases"] | null) ?? [],
-          xpTransactions: (xpResponse.data as FitQuestState["xpTransactions"] | null) ?? [],
-          encouragements: (encouragementsResponse.data as FitQuestState["encouragements"] | null) ?? [],
-          partnerSummaries,
-        } satisfies FitQuestState;
+        throwIfSupabaseError(profileResponse, "profile");
+
+        const remoteProfile = (profileResponse.data as Profile | null) ?? createDefaultProfile(userId, email);
+        if (!profileResponse.data) {
+          const upsertResponse = await withTimeout(
+            supabase.from("profiles").upsert(remoteProfile as never),
+            "Creating your profile took too long.",
+          );
+          throwIfSupabaseError(upsertResponse, "profile setup");
+        }
+
+        const [
+          strengthWorkoutsResponse,
+          exercisesResponse,
+          runsResponse,
+          lifestyleResponse,
+          tasksResponse,
+          rewardsResponse,
+          rewardPurchasesResponse,
+          badgesResponse,
+          userBadgesResponse,
+          xpResponse,
+          connectionsResponse,
+          encouragementsResponse,
+          partnerSummariesResponse,
+        ] = await withTimeout(
+          Promise.all([
+            supabase.from("strength_workouts").select("*").eq("user_id", userId),
+            supabase
+              .from("strength_exercises")
+              .select("*, strength_workouts!inner(user_id)")
+              .eq("strength_workouts.user_id", userId),
+            supabase.from("running_workouts").select("*").eq("user_id", userId),
+            supabase.from("daily_lifestyle_logs").select("*").eq("user_id", userId),
+            supabase.from("tasks").select("*").eq("user_id", userId),
+            supabase.from("rewards").select("*").eq("user_id", userId),
+            supabase.from("reward_purchases").select("*").eq("user_id", userId),
+            supabase.from("badges").select("*"),
+            supabase.from("user_badges").select("*").eq("user_id", userId),
+            supabase.from("xp_transactions").select("*").eq("user_id", userId),
+            supabase
+              .from("partner_connections")
+              .select("*")
+              .or(`requester_id.eq.${userId},receiver_id.eq.${userId}`),
+            supabase
+              .from("encouragements")
+              .select("*")
+              .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`),
+            supabase.rpc("get_partner_summaries"),
+          ]),
+          "Loading your account data took too long.",
+        );
+
+        [
+          ["strength workouts", strengthWorkoutsResponse],
+          ["strength exercises", exercisesResponse],
+          ["running workouts", runsResponse],
+          ["lifestyle logs", lifestyleResponse],
+          ["tasks", tasksResponse],
+          ["rewards", rewardsResponse],
+          ["reward purchases", rewardPurchasesResponse],
+          ["badges", badgesResponse],
+          ["user badges", userBadgesResponse],
+          ["XP history", xpResponse],
+          ["partner connections", connectionsResponse],
+          ["encouragements", encouragementsResponse],
+        ].forEach(([label, response]) => throwIfSupabaseError(response, String(label)));
+
+        if (partnerSummariesResponse.error) {
+          setNotice({
+            tone: "error",
+            message: "Family summaries need the latest Supabase schema. Dashboard data still loaded.",
+          });
+        }
+
+        setState((previous) => {
+          const badges = badgesResponse.data?.length
+            ? (badgesResponse.data as Badge[])
+            : previous.badges;
+          const connections = (connectionsResponse.data as PartnerConnection[] | null) ?? [];
+          const partnerSummaries = mapPartnerSummaries(
+            (partnerSummariesResponse.data as PartnerSummaryRpcRow[] | null) ?? [],
+            badges,
+          );
+          const next = {
+            currentUserId: userId,
+            profiles: [remoteProfile, ...partnerSummaries.map((summary) => summary.profile)],
+            partnerConnections: connections,
+            strengthWorkouts: (strengthWorkoutsResponse.data as StrengthWorkout[] | null) ?? [],
+            strengthExercises: stripJoinedWorkout(
+              (exercisesResponse.data as (StrengthExercise & { strength_workouts?: unknown })[] | null) ?? [],
+            ),
+            runningWorkouts: (runsResponse.data as RunningWorkout[] | null) ?? [],
+            dailyLifestyleLogs: (lifestyleResponse.data as DailyLifestyleLog[] | null) ?? [],
+            tasks: (tasksResponse.data as Task[] | null) ?? [],
+            badges,
+            userBadges: (userBadgesResponse.data as FitQuestState["userBadges"] | null) ?? [],
+            rewards: (rewardsResponse.data as FitQuestState["rewards"] | null) ?? [],
+            rewardPurchases: (rewardPurchasesResponse.data as FitQuestState["rewardPurchases"] | null) ?? [],
+            xpTransactions: (xpResponse.data as FitQuestState["xpTransactions"] | null) ?? [],
+            encouragements: (encouragementsResponse.data as FitQuestState["encouragements"] | null) ?? [],
+            partnerSummaries,
+          } satisfies FitQuestState;
+          return ensureTodayTasks(next, userId);
+        });
+        setAuthError(null);
         setAuthStatus("authenticated");
-        return ensureTodayTasks(next, userId);
-      });
+      } catch (error) {
+        setAuthError(readErrorMessage(error));
+        setAuthStatus("error");
+      }
     },
     [supabase],
   );
 
-  useEffect(() => {
+  const loadCurrentSession = useCallback(async () => {
     if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => {
+    setAuthStatus("loading");
+    try {
+      const { data, error } = await withTimeout(
+        supabase.auth.getSession(),
+        "Checking your login session took too long.",
+      );
+      if (error) throw new Error(error.message);
       const user = data.session?.user;
       if (!user) {
+        setAuthError(null);
         setAuthStatus("anonymous");
         return;
       }
-      void loadSupabaseProfile(user.id, user.email ?? "user@example.com");
-    });
+      await loadSupabaseProfile(user.id, user.email ?? "user@example.com");
+    } catch (error) {
+      setAuthError(readErrorMessage(error));
+      setAuthStatus("error");
+    }
+  }, [loadSupabaseProfile, supabase]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    const sessionTimer = window.setTimeout(() => {
+      void loadCurrentSession();
+    }, 0);
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "INITIAL_SESSION") return;
       if (session?.user) {
         setAuthStatus("loading");
-        void loadSupabaseProfile(session.user.id, session.user.email ?? "user@example.com");
+        window.setTimeout(() => {
+          void loadSupabaseProfile(session.user.id, session.user.email ?? "user@example.com");
+        }, 0);
       } else {
+        setAuthError(null);
         setAuthStatus("anonymous");
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [loadSupabaseProfile, supabase]);
+    return () => {
+      window.clearTimeout(sessionTimer);
+      subscription.unsubscribe();
+    };
+  }, [loadCurrentSession, loadSupabaseProfile, supabase]);
 
   const signIn = useCallback(
     async (email: string, password: string) => {
@@ -278,15 +342,24 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         return true;
       }
 
-      setAuthStatus("loading");
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) {
+      try {
+        setAuthStatus("loading");
+        const { data, error } = await withTimeout(
+          supabase.auth.signInWithPassword({ email, password }),
+          "Login took too long.",
+        );
+        if (error) {
+          setAuthStatus("anonymous");
+          setAuthError(error.message);
+          return false;
+        }
+        if (data.user) await loadSupabaseProfile(data.user.id, data.user.email ?? email);
+        return true;
+      } catch (error) {
         setAuthStatus("anonymous");
-        setAuthError(error.message);
+        setAuthError(readErrorMessage(error));
         return false;
       }
-      if (data.user) await loadSupabaseProfile(data.user.id, data.user.email ?? email);
-      return true;
     },
     [loadSupabaseProfile, state.profiles, supabase],
   );
@@ -305,35 +378,53 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         return true;
       }
 
-      setAuthStatus("loading");
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { name } },
-      });
-      if (error) {
+      try {
+        setAuthStatus("loading");
+        const { data, error } = await withTimeout(
+          supabase.auth.signUp({
+            email,
+            password,
+            options: { data: { name } },
+          }),
+          "Signup took too long.",
+        );
+        if (error) {
+          setAuthStatus("anonymous");
+          setAuthError(error.message);
+          return false;
+        }
+        if (data.user && data.session) {
+          const newProfile = createDefaultProfile(data.user.id, data.user.email ?? email, name);
+          const upsertResponse = await withTimeout(
+            supabase.from("profiles").upsert(newProfile as never),
+            "Creating your profile took too long.",
+          );
+          throwIfSupabaseError(upsertResponse, "profile setup");
+          setState((previous) => ({
+            ...emptyState(newProfile.id, previous.badges),
+            currentUserId: newProfile.id,
+            profiles: [newProfile],
+            tasks: generateDailyTasks(newProfile, emptyState(newProfile.id, previous.badges)),
+          }));
+          setAuthStatus("authenticated");
+          return true;
+        }
+
         setAuthStatus("anonymous");
-        setAuthError(error.message);
+        setNotice({ tone: "info", message: "Account created. Check your email to confirm it, then log in." });
+        return false;
+      } catch (error) {
+        setAuthStatus("anonymous");
+        setAuthError(readErrorMessage(error));
         return false;
       }
-      if (data.user) {
-        const newProfile = createDefaultProfile(data.user.id, data.user.email ?? email, name);
-        await supabase.from("profiles").upsert(newProfile);
-        setState((previous) => ({
-          ...emptyState(newProfile.id, previous.badges),
-          currentUserId: newProfile.id,
-          profiles: [newProfile],
-          tasks: generateDailyTasks(newProfile, emptyState(newProfile.id, previous.badges)),
-        }));
-        setAuthStatus("authenticated");
-      }
-      return true;
     },
     [supabase],
   );
 
   const signOut = useCallback(async () => {
     if (supabase) await supabase.auth.signOut();
+    setAuthError(null);
     setAuthStatus(supabaseReady ? "anonymous" : "demo");
     setState((previous) => ensureTodayTasks({ ...previous, currentUserId: previous.profiles[0].id }));
   }, [supabase, supabaseReady]);
@@ -685,6 +776,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
     createPartnerInvite,
     acceptPartnerInvite,
     refreshAccountData,
+    retryAuthLoad: loadCurrentSession,
   };
 
   return <FitQuestContext.Provider value={value}>{children}</FitQuestContext.Provider>;
@@ -979,4 +1071,28 @@ async function syncArray<T>(
 ) {
   if (!payload.length) return;
   await supabase.from(table).upsert(payload as never);
+}
+
+async function withTimeout<T>(promise: PromiseLike<T>, message: string): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), AUTH_LOAD_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
+function throwIfSupabaseError(response: unknown, label: string) {
+  const maybeResponse = response as { error?: { message?: string } | null };
+  if (maybeResponse.error) {
+    throw new Error(`Could not load ${label}: ${maybeResponse.error.message ?? "Supabase returned an error."}`);
+  }
+}
+
+function readErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Something went wrong while loading FitQuest.";
 }

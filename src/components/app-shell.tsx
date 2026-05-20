@@ -11,12 +11,13 @@ import {
   HeartHandshake,
   Home,
   LogOut,
+  RotateCcw,
   Salad,
   Settings,
   Trophy,
   X,
 } from "lucide-react";
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { useFitQuest } from "@/components/app-provider";
 import { ProgressBar } from "@/components/ui";
 import { xpIntoCurrentLevel } from "@/lib/fitness";
@@ -36,8 +37,11 @@ const navItems = [
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { profile, signOut, supabaseReady, authStatus, notice, clearNotice } = useFitQuest();
+  const { profile, signOut, supabaseReady, authStatus, authError, notice, clearNotice, retryAuthLoad } =
+    useFitQuest();
   const mustOnboard = supabaseReady && authStatus === "authenticated" && !profile.onboarding_completed;
+  const isLoading = supabaseReady && authStatus === "loading";
+  const [slowLoading, setSlowLoading] = useState(false);
 
   useEffect(() => {
     if (mustOnboard && pathname !== "/onboarding") {
@@ -45,8 +49,71 @@ export function AppShell({ children }: { children: ReactNode }) {
     }
   }, [mustOnboard, pathname, router]);
 
-  if (supabaseReady && authStatus === "loading") {
-    return <CenteredState title="Loading FitQuest" text="Preparing your account data." />;
+  useEffect(() => {
+    if (!isLoading) {
+      const resetTimer = window.setTimeout(() => setSlowLoading(false), 0);
+      return () => window.clearTimeout(resetTimer);
+    }
+    const timer = window.setTimeout(() => setSlowLoading(true), 8000);
+    return () => window.clearTimeout(timer);
+  }, [isLoading]);
+
+  if (isLoading) {
+    return (
+      <CenteredState
+        title="Loading FitQuest"
+        text={
+          slowLoading
+            ? "This is taking longer than expected. Retry the account check, or open the login screen again."
+            : "Preparing your account data."
+        }
+        action={
+          slowLoading ? (
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                onClick={() => void retryAuthLoad()}
+                className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 text-sm font-semibold text-white"
+              >
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                Retry
+              </button>
+              <Link
+                href="/auth"
+                className="inline-flex h-11 items-center justify-center rounded-lg border border-zinc-300 px-4 text-sm font-semibold text-zinc-700"
+              >
+                Go to login
+              </Link>
+            </div>
+          ) : undefined
+        }
+      />
+    );
+  }
+
+  if (supabaseReady && authStatus === "error") {
+    return (
+      <CenteredState
+        title="Could not load FitQuest"
+        text={authError ?? "The account check failed. Retry first; if it keeps happening, log in again."}
+        action={
+          <div className="flex flex-wrap justify-center gap-3">
+            <button
+              onClick={() => void retryAuthLoad()}
+              className="inline-flex h-11 items-center justify-center gap-2 rounded-lg bg-zinc-950 px-4 text-sm font-semibold text-white"
+            >
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              Retry
+            </button>
+            <button
+              onClick={() => void signOut()}
+              className="inline-flex h-11 items-center justify-center rounded-lg border border-zinc-300 px-4 text-sm font-semibold text-zinc-700"
+            >
+              Log in again
+            </button>
+          </div>
+        }
+      />
+    );
   }
 
   if (supabaseReady && authStatus === "anonymous") {
