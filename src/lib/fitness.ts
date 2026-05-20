@@ -1,5 +1,6 @@
 import {
   Badge,
+  AvatarBodyPartScores,
   CoachingSummary,
   DailyLifestyleLog,
   ExerciseRecord,
@@ -621,11 +622,55 @@ export function calculateQuestAvatarStats({
   };
 }
 
+export function calculateStrengthBodyPartImpact(
+  exercises: Pick<
+    StrengthExercise,
+    "exercise_name" | "sets" | "reps" | "weight" | "is_bodyweight" | "estimated_1rm"
+  >[],
+  split: WorkoutSplit,
+) {
+  const scores: AvatarBodyPartScores = {
+    chest: 0,
+    triceps: 0,
+    back: 0,
+    biceps: 0,
+    legs: 0,
+  };
+  let weightedTotal = 0;
+
+  addSplitEffort(scores, split, 5);
+  exercises
+    .filter((exercise) => exercise.exercise_name.trim())
+    .forEach((exercise) => {
+      const targets = inferExerciseBodyParts(exercise.exercise_name, split);
+      const weightedStrength = exercise.is_bodyweight ? 0 : weightedExerciseStrength(exercise);
+      const setEffort = exercise.is_bodyweight
+        ? Math.min(14, (exercise.sets * exercise.reps) / 4)
+        : Math.min(18, (exercise.sets * exercise.reps * weightedStrength) / 460);
+      weightedTotal += weightedStrength;
+      targets.forEach((target) => {
+        scores[target] += setEffort / targets.length;
+      });
+    });
+
+  const maxScore = Math.max(1, ...Object.values(scores));
+  const normalizedScores = Object.fromEntries(
+    Object.entries(scores).map(([key, value]) => [key, Math.round((value / maxScore) * 100)]),
+  ) as AvatarBodyPartScores;
+  const dominantBodyPart = Object.entries(normalizedScores).sort((a, b) => b[1] - a[1])[0][0] as keyof AvatarBodyPartScores;
+
+  return {
+    bodyParts: normalizedScores,
+    dominantBodyPart,
+    weightedTotal: Number(weightedTotal.toFixed(1)),
+  };
+}
+
 export function weightedExerciseStrength(exercise: Pick<StrengthExercise, "exercise_name" | "estimated_1rm">) {
   return Number((exercise.estimated_1rm * exerciseStrengthFactor(exercise.exercise_name)).toFixed(1));
 }
 
-function exerciseStrengthFactor(exerciseName: string) {
+export function exerciseStrengthFactor(exerciseName: string) {
   const name = exerciseName.toLowerCase();
   if (/(dumbbell|db)/.test(name) && /incline/.test(name)) return 1.9;
   if (/(fly|lateral|raise|curl|extension|pushdown)/.test(name)) return 2.1;
@@ -659,7 +704,7 @@ function addSplitEffort(
   }
 }
 
-function inferExerciseBodyParts(
+export function inferExerciseBodyParts(
   exerciseName: string,
   fallbackSplit?: WorkoutSplit,
 ): (keyof QuestAvatarStats["bodyParts"])[] {
