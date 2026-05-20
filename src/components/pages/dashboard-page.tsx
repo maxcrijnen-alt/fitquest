@@ -2,6 +2,7 @@
 
 import {
   Activity,
+  Award,
   CheckCircle2,
   Coins,
   Dumbbell,
@@ -11,6 +12,8 @@ import {
   Medal,
   Sparkles,
   Trophy,
+  X,
+  type LucideIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
@@ -37,11 +40,11 @@ import {
   weeklyXp,
   xpIntoCurrentLevel,
 } from "@/lib/fitness";
-import { FitQuestState } from "@/lib/types";
+import { FitQuestState, WorkoutResultSummary } from "@/lib/types";
 import { numberCompact } from "@/lib/utils";
 
 export function DashboardPage() {
-  const { state, profile, completeTask } = useFitQuest();
+  const { state, profile, completeTask, lastWorkoutResult, clearWorkoutResult } = useFitQuest();
   const workouts = getStrengthWorkouts(state, profile.id);
   const exercises = workouts.flatMap((workout) => getWorkoutExercises(state, workout.id));
   const runs = getRuns(state, profile.id);
@@ -92,6 +95,10 @@ export function DashboardPage() {
           </Link>
         </div>
       </div>
+
+      {lastWorkoutResult ? (
+        <WorkoutResultPanel result={lastWorkoutResult} onDismiss={clearWorkoutResult} />
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard
@@ -304,6 +311,151 @@ export function DashboardPage() {
         </div>
       </Card>
     </AppShell>
+  );
+}
+
+function WorkoutResultPanel({
+  result,
+  onDismiss,
+}: {
+  result: WorkoutResultSummary;
+  onDismiss: () => void;
+}) {
+  const topChanges = result.avatarBodyPartChanges.filter((part) => part.delta > 0).slice(0, 4);
+
+  return (
+    <Card className="mb-6 border-emerald-200 bg-emerald-50">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                Workout complete
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold text-emerald-950">
+                {result.splitType} saved
+              </h2>
+              <p className="mt-2 text-sm leading-6 text-emerald-900">
+                {numberCompact(result.totalVolume)} kg volume. Next suggested split:
+                {" "}
+                <span className="font-semibold">{result.suggestedNextSplit}</span>.
+                {" "}
+                {result.suggestedReason}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-emerald-800 ring-1 ring-emerald-200 hover:bg-emerald-100"
+              title="Dismiss workout result"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-3">
+            <ResultMetric icon={Sparkles} label="XP earned" value={`+${result.xpEarned}`} />
+            <ResultMetric icon={Coins} label="Coins earned" value={`+${result.coinsEarned}`} />
+            <ResultMetric icon={Dumbbell} label="Volume" value={`${numberCompact(result.totalVolume)} kg`} />
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:w-[420px]">
+          <div className="rounded-lg border border-emerald-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-zinc-950">Avatar changes</p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {result.avatarFormBefore === result.avatarFormAfter
+                    ? result.avatarFormAfter
+                    : `${result.avatarFormBefore} -> ${result.avatarFormAfter}`}
+                </p>
+              </div>
+              <Award className="h-5 w-5 text-amber-600" aria-hidden="true" />
+            </div>
+            <div className="mt-3 space-y-3">
+              {topChanges.length ? (
+                topChanges.map((part) => (
+                  <ProgressBar
+                    key={part.key}
+                    value={part.after}
+                    label={`${part.label} +${part.delta}`}
+                  />
+                ))
+              ) : (
+                <p className="text-sm text-zinc-500">
+                  Avatar balance stayed steady. Add more volume or a lagging split to move the bars.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <ResultList title="PRs" items={result.prMessages} empty="No new PRs this time." />
+            <ResultList title="Unlocked" items={result.badgeNames} empty="No new badges this time." />
+          </div>
+          {result.xpReasons.length ? (
+            <div className="rounded-lg border border-emerald-200 bg-white p-4">
+              <p className="text-sm font-semibold text-zinc-950">Rewards came from</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {result.xpReasons.map((reason) => (
+                  <span key={reason} className="rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800">
+                    {reason}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function ResultMetric({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-white p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-zinc-500">{label}</p>
+        <Icon className="h-4 w-4 text-emerald-700" aria-hidden="true" />
+      </div>
+      <p className="mt-2 text-2xl font-semibold text-zinc-950">{value}</p>
+    </div>
+  );
+}
+
+function ResultList({
+  title,
+  items,
+  empty,
+}: {
+  title: string;
+  items: string[];
+  empty: string;
+}) {
+  return (
+    <div className="rounded-lg border border-emerald-200 bg-white p-4">
+      <p className="text-sm font-semibold text-zinc-950">{title}</p>
+      <div className="mt-2 space-y-2">
+        {items.length ? (
+          items.map((item) => (
+            <p key={item} className="text-sm leading-5 text-zinc-600">
+              {item}
+            </p>
+          ))
+        ) : (
+          <p className="text-sm leading-5 text-zinc-500">{empty}</p>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -256,6 +256,28 @@ export type QuestAvatarStats = {
   dominantBodyPart: keyof AvatarBodyPartScores;
 };
 
+export type WorkoutResultSummary = {
+  workoutId: string;
+  splitType: WorkoutSplit;
+  totalVolume: number;
+  xpEarned: number;
+  coinsEarned: number;
+  xpReasons: string[];
+  prMessages: string[];
+  badgeNames: string[];
+  avatarFormBefore: string;
+  avatarFormAfter: string;
+  avatarBodyPartChanges: {
+    key: keyof AvatarBodyPartScores;
+    label: string;
+    before: number;
+    after: number;
+    delta: number;
+  }[];
+  suggestedNextSplit: WorkoutSplit;
+  suggestedReason: string;
+};
+
 export type CoachingSummary = {
   weeklyFeedback: string[];
   strengthSuggestion: string;

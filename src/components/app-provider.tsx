@@ -14,6 +14,7 @@ import { getDemoState } from "@/lib/demo-data";
 import {
   calculatePace,
   calculatePersonalRecords,
+  calculateQuestAvatarStats,
   calculateWorkoutVolume,
   estimatedOneRepMax,
   generateInviteCode,
@@ -33,11 +34,13 @@ import {
   PartnerConnection,
   PartnerSummary,
   Profile,
+  QuestAvatarStats,
   RunningLevel,
   RunningWorkout,
   StrengthExercise,
   StrengthWorkout,
   Task,
+  WorkoutResultSummary,
   WorkoutSplit,
 } from "@/lib/types";
 
@@ -78,7 +81,9 @@ type FitQuestContextValue = {
   isDemoMode: boolean;
   authError: string | null;
   notice: AppNotice;
+  lastWorkoutResult: WorkoutResultSummary | null;
   clearNotice: () => void;
+  clearWorkoutResult: () => void;
   signIn: (email: string, password: string) => Promise<boolean>;
   signUp: (email: string, password: string, name: string) => Promise<boolean>;
   signOut: () => Promise<void>;
@@ -124,6 +129,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
   const [authStatus, setAuthStatus] = useState<AuthStatus>(() => (supabaseReady ? "loading" : "demo"));
   const [authError, setAuthError] = useState<string | null>(null);
   const [notice, setNotice] = useState<AppNotice>(null);
+  const [lastWorkoutResult, setLastWorkoutResult] = useState<WorkoutResultSummary | null>(null);
   const localStorageLoaded = useRef(false);
 
   useEffect(() => {
@@ -271,6 +277,7 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
           } satisfies FitQuestState;
           return ensureTodayTasks(next, userId);
         });
+        setLastWorkoutResult(null);
         setAuthError(null);
         setAuthStatus("authenticated");
       } catch (error) {
@@ -425,11 +432,13 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     if (supabase) await supabase.auth.signOut();
     setAuthError(null);
+    setLastWorkoutResult(null);
     setAuthStatus(supabaseReady ? "anonymous" : "demo");
     setState((previous) => ensureTodayTasks({ ...previous, currentUserId: previous.profiles[0].id }));
   }, [supabase, supabaseReady]);
 
   const switchDemoUser = useCallback((userId: string) => {
+    setLastWorkoutResult(null);
     setState((previous) => ensureTodayTasks({ ...previous, currentUserId: userId }));
   }, []);
 
@@ -463,6 +472,20 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
         const next = cloneState(previous);
         const userId = previous.currentUserId;
         const profile = getProfile(previous, userId);
+        const profileBefore = { ...profile };
+        const xpTransactionsBefore = previous.xpTransactions.length;
+        const badgeIdsBefore = new Set(previous.userBadges.filter((badge) => badge.user_id === userId).map((badge) => badge.badge_id));
+        const avatarBefore = calculateQuestAvatarStats({
+          profile,
+          workouts: next.strengthWorkouts.filter((item) => item.user_id === userId),
+          exercises: next.strengthExercises.filter((item) =>
+            next.strengthWorkouts.some(
+              (workoutItem) => workoutItem.id === item.workout_id && workoutItem.user_id === userId,
+            ),
+          ),
+          runs: next.runningWorkouts.filter((run) => run.user_id === userId),
+          badgeCount: badgeIdsBefore.size,
+        });
         const workoutId = randomId("strength");
         const exercises = input.exercises
           .filter((exercise) => exercise.exercise_name.trim())
@@ -504,6 +527,34 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
           awardBadge(next, userId, "first_strength_pr");
         }
         applyLevelBadges(next, profile.id);
+        const profileAfter = getProfile(next, userId);
+        const badgeIdsAfter = new Set(next.userBadges.filter((badge) => badge.user_id === userId).map((badge) => badge.badge_id));
+        const avatarAfter = calculateQuestAvatarStats({
+          profile: profileAfter,
+          workouts: next.strengthWorkouts.filter((item) => item.user_id === userId),
+          exercises: next.strengthExercises.filter((item) =>
+            next.strengthWorkouts.some(
+              (workoutItem) => workoutItem.id === item.workout_id && workoutItem.user_id === userId,
+            ),
+          ),
+          runs: next.runningWorkouts.filter((run) => run.user_id === userId),
+          badgeCount: badgeIdsAfter.size,
+        });
+        setLastWorkoutResult(
+          buildWorkoutResultSummary({
+            next,
+            userId,
+            workout,
+            exercises,
+            previousRecords,
+            profileBefore,
+            profileAfter,
+            xpTransactionsBefore,
+            badgeIdsBefore,
+            avatarBefore,
+            avatarAfter,
+          }),
+        );
         void syncTable(supabase, "strength_workouts", workout);
         if (exercises.length) void syncTable(supabase, "strength_exercises", exercises);
         setNotice({ tone: "success", message: "Strength workout saved." });
@@ -760,7 +811,9 @@ export function FitQuestProvider({ children }: { children: ReactNode }) {
     isDemoMode: authStatus === "demo",
     authError,
     notice,
+    lastWorkoutResult,
     clearNotice: () => setNotice(null),
+    clearWorkoutResult: () => setLastWorkoutResult(null),
     signIn,
     signUp,
     signOut,
@@ -786,6 +839,121 @@ export function useFitQuest() {
   const context = useContext(FitQuestContext);
   if (!context) throw new Error("useFitQuest must be used inside FitQuestProvider");
   return context;
+}
+
+function buildWorkoutResultSummary({
+  next,
+  userId,
+  workout,
+  exercises,
+  previousRecords,
+  profileBefore,
+  profileAfter,
+  xpTransactionsBefore,
+  badgeIdsBefore,
+  avatarBefore,
+  avatarAfter,
+}: {
+  next: FitQuestState;
+  userId: string;
+  workout: StrengthWorkout;
+  exercises: StrengthExercise[];
+  previousRecords: ReturnType<typeof calculatePersonalRecords>;
+  profileBefore: Profile;
+  profileAfter: Profile;
+  xpTransactionsBefore: number;
+  badgeIdsBefore: Set<string>;
+  avatarBefore: QuestAvatarStats;
+  avatarAfter: QuestAvatarStats;
+}): WorkoutResultSummary {
+  const previousRecordMap = new Map(
+    previousRecords.exercises.map((record) => [record.exerciseName.toLowerCase(), record]),
+  );
+  const prMessages = new Set<string>();
+
+  if (workout.total_volume > previousRecords.highestWorkoutVolume) {
+    prMessages.add(`New workout volume PR: ${Math.round(workout.total_volume).toLocaleString()} kg`);
+  }
+
+  exercises.forEach((exercise) => {
+    const previous = previousRecordMap.get(exercise.exercise_name.toLowerCase());
+    if (!previous || exercise.weight > previous.highestWeight) {
+      prMessages.add(`${exercise.exercise_name}: highest weight ${exercise.weight} kg`);
+    }
+    if (!exercise.is_bodyweight && (!previous || exercise.estimated_1rm > previous.highestEstimatedOneRepMax)) {
+      prMessages.add(`${exercise.exercise_name}: est. 1RM ${exercise.estimated_1rm} kg`);
+    }
+    if (exercise.is_bodyweight && (!previous || exercise.reps > previous.mostBodyweightReps)) {
+      prMessages.add(`${exercise.exercise_name}: bodyweight reps ${exercise.reps}`);
+    }
+  });
+
+  const newBadgeNames = next.userBadges
+    .filter((badge) => badge.user_id === userId && !badgeIdsBefore.has(badge.badge_id))
+    .map((badge) => next.badges.find((item) => item.id === badge.badge_id)?.name)
+    .filter((badgeName): badgeName is string => Boolean(badgeName));
+  const xpReasons = next.xpTransactions
+    .slice(xpTransactionsBefore)
+    .filter((transaction) => transaction.user_id === userId)
+    .map((transaction) => transaction.reason);
+  const avatarBodyPartChanges = bodyPartResultKeys
+    .map((part) => ({
+      key: part.key,
+      label: part.label,
+      before: avatarBefore.bodyParts[part.key],
+      after: avatarAfter.bodyParts[part.key],
+      delta: Math.max(0, avatarAfter.bodyParts[part.key] - avatarBefore.bodyParts[part.key]),
+    }))
+    .sort((a, b) => b.delta - a.delta);
+  const suggestion = suggestNextSplit(avatarAfter.bodyParts);
+
+  return {
+    workoutId: workout.id,
+    splitType: workout.split_type,
+    totalVolume: workout.total_volume,
+    xpEarned: profileAfter.xp - profileBefore.xp,
+    coinsEarned: profileAfter.coins - profileBefore.coins,
+    xpReasons: Array.from(new Set(xpReasons)),
+    prMessages: Array.from(prMessages).slice(0, 5),
+    badgeNames: newBadgeNames,
+    avatarFormBefore: avatarBefore.form,
+    avatarFormAfter: avatarAfter.form,
+    avatarBodyPartChanges,
+    suggestedNextSplit: suggestion.split,
+    suggestedReason: suggestion.reason,
+  };
+}
+
+const bodyPartResultKeys: {
+  key: keyof QuestAvatarStats["bodyParts"];
+  label: string;
+}[] = [
+  { key: "chest", label: "Chest" },
+  { key: "triceps", label: "Triceps" },
+  { key: "back", label: "Back" },
+  { key: "biceps", label: "Biceps" },
+  { key: "legs", label: "Legs" },
+];
+
+function suggestNextSplit(bodyParts: QuestAvatarStats["bodyParts"]) {
+  const splitScores: { split: WorkoutSplit; score: number; reason: string }[] = [
+    {
+      split: "Chest + triceps",
+      score: (bodyParts.chest + bodyParts.triceps) / 2,
+      reason: "Chest and triceps are the lowest avatar area.",
+    },
+    {
+      split: "Back + biceps",
+      score: (bodyParts.back + bodyParts.biceps) / 2,
+      reason: "Back and biceps are the lowest avatar area.",
+    },
+    {
+      split: "Legs",
+      score: bodyParts.legs,
+      reason: "Legs are the lowest avatar area.",
+    },
+  ];
+  return splitScores.sort((a, b) => a.score - b.score)[0];
 }
 
 function createDefaultProfile(id: string, email: string, name = "FitQuest User"): Profile {
