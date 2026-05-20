@@ -233,6 +233,29 @@ export type RelativeStrengthScore = {
   liftCount: number;
 };
 
+export type AvatarBodyPartScores = {
+  chest: number;
+  triceps: number;
+  back: number;
+  biceps: number;
+  legs: number;
+};
+
+export type QuestAvatarStats = {
+  level: number;
+  power: number;
+  endurance: number;
+  consistency: number;
+  prestige: number;
+  form: string;
+  nextForm: string | null;
+  trainingScore: number;
+  workoutCount: number;
+  runCount: number;
+  bodyParts: AvatarBodyPartScores;
+  dominantBodyPart: keyof AvatarBodyPartScores;
+};
+
 export type CoachingSummary = {
   weeklyFeedback: string[];
   strengthSuggestion: string;

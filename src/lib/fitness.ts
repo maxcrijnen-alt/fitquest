@@ -7,6 +7,7 @@ import {
   PartnerSummary,
   PersonalRecords,
   Profile,
+  QuestAvatarStats,
   RelativeStrengthScore,
   RunningWorkout,
   StrengthExercise,
@@ -470,7 +471,7 @@ export function calculateRelativeStrengthScores(
         .filter((exercise) => workoutIds.has(exercise.workout_id) && !exercise.is_bodyweight)
         .reduce((scores, exercise) => {
           const key = exercise.exercise_name.toLowerCase();
-          scores.set(key, Math.max(scores.get(key) ?? 0, exercise.estimated_1rm));
+          scores.set(key, Math.max(scores.get(key) ?? 0, weightedExerciseStrength(exercise)));
           return scores;
         }, new Map<string, number>());
       const topLifts = Array.from(topExerciseScores.values())
@@ -541,4 +542,151 @@ export function runningChartData(runs: RunningWorkout[]) {
     distance: run.distance_km,
     pace: run.pace_per_km,
   }));
+}
+
+export function calculateQuestAvatarStats({
+  profile,
+  workouts,
+  exercises,
+  runs,
+  badgeCount,
+}: {
+  profile: Profile;
+  workouts: StrengthWorkout[];
+  exercises: StrengthExercise[];
+  runs: RunningWorkout[];
+  badgeCount: number;
+}): QuestAvatarStats {
+  const bodyParts: QuestAvatarStats["bodyParts"] = {
+    chest: 0,
+    triceps: 0,
+    back: 0,
+    biceps: 0,
+    legs: 0,
+  };
+  const workoutMap = new Map(workouts.map((workout) => [workout.id, workout]));
+
+  workouts.forEach((workout) => {
+    const sessionEffort = Math.min(18, 8 + workout.total_volume / 1200);
+    addSplitEffort(bodyParts, workout.split_type, sessionEffort);
+  });
+
+  exercises.forEach((exercise) => {
+    const workout = workoutMap.get(exercise.workout_id);
+    const targets = inferExerciseBodyParts(exercise.exercise_name, workout?.split_type);
+    const setEffort = exercise.is_bodyweight
+      ? Math.min(12, (exercise.sets * exercise.reps) / 5)
+      : Math.min(16, (exercise.sets * exercise.reps * weightedExerciseStrength(exercise)) / 520);
+    targets.forEach((target) => {
+      bodyParts[target] += setEffort / targets.length;
+    });
+  });
+
+  runs.forEach((run) => {
+    bodyParts.legs += Math.min(16, run.distance_km * 2.2);
+  });
+
+  const normalizedBodyParts = Object.fromEntries(
+    Object.entries(bodyParts).map(([key, value]) => [key, clampScore(value)]),
+  ) as QuestAvatarStats["bodyParts"];
+  const dominantBodyPart = Object.entries(normalizedBodyParts).sort((a, b) => b[1] - a[1])[0][0] as keyof QuestAvatarStats["bodyParts"];
+  const totalRunDistance = runs.reduce((total, run) => total + run.distance_km, 0);
+  const averageBodyPart =
+    Object.values(normalizedBodyParts).reduce((total, value) => total + value, 0) /
+    Object.values(normalizedBodyParts).length;
+  const power = clampScore(
+    workouts.length * 7 +
+      Math.max(0, ...workouts.map((workout) => workout.total_volume)) / 1600 +
+      averageBodyPart * 0.28,
+  );
+  const endurance = clampScore(runs.length * 8 + totalRunDistance * 3.2);
+  const consistency = clampScore(profile.current_streak * 9 + profile.level * 7);
+  const prestige = clampScore(badgeCount * 11 + profile.level * 8);
+  const trainingScore = clampScore((power + endurance + consistency + prestige + averageBodyPart) / 5);
+  const { form, nextForm } = avatarForm(trainingScore);
+
+  return {
+    level: profile.level,
+    power,
+    endurance,
+    consistency,
+    prestige,
+    form,
+    nextForm,
+    trainingScore,
+    workoutCount: workouts.length,
+    runCount: runs.length,
+    bodyParts: normalizedBodyParts,
+    dominantBodyPart,
+  };
+}
+
+export function weightedExerciseStrength(exercise: Pick<StrengthExercise, "exercise_name" | "estimated_1rm">) {
+  return Number((exercise.estimated_1rm * exerciseStrengthFactor(exercise.exercise_name)).toFixed(1));
+}
+
+function exerciseStrengthFactor(exerciseName: string) {
+  const name = exerciseName.toLowerCase();
+  if (/(dumbbell|db)/.test(name) && /incline/.test(name)) return 1.9;
+  if (/(fly|lateral|raise|curl|extension|pushdown)/.test(name)) return 2.1;
+  if (/(dumbbell|db)/.test(name)) return 1.75;
+  if (/leg press/.test(name)) return 0.48;
+  if (/deadlift/.test(name)) return 0.78;
+  if (/squat/.test(name)) return 0.82;
+  if (/pulldown|machine|cable/.test(name)) return 0.82;
+  if (/incline/.test(name)) return 1.14;
+  if (/bench/.test(name)) return 1;
+  if (/row/.test(name)) return 1.05;
+  if (/press/.test(name)) return 1.08;
+  return 1;
+}
+
+function addSplitEffort(
+  scores: QuestAvatarStats["bodyParts"],
+  split: WorkoutSplit,
+  effort: number,
+) {
+  if (split === "Chest + triceps") {
+    scores.chest += effort;
+    scores.triceps += effort * 0.82;
+  }
+  if (split === "Back + biceps") {
+    scores.back += effort;
+    scores.biceps += effort * 0.82;
+  }
+  if (split === "Legs") {
+    scores.legs += effort * 1.12;
+  }
+}
+
+function inferExerciseBodyParts(
+  exerciseName: string,
+  fallbackSplit?: WorkoutSplit,
+): (keyof QuestAvatarStats["bodyParts"])[] {
+  const name = exerciseName.toLowerCase();
+  const targets: (keyof QuestAvatarStats["bodyParts"])[] = [];
+
+  if (/(bench|press|chest|fly|incline|dip|push)/.test(name)) targets.push("chest");
+  if (/(tricep|skull|extension|pushdown|dip|close grip)/.test(name)) targets.push("triceps");
+  if (/(row|pulldown|pull up|pull-up|lat|deadlift|back)/.test(name)) targets.push("back");
+  if (/(curl|bicep|chin)/.test(name)) targets.push("biceps");
+  if (/(squat|leg|lunge|deadlift|hamstring|quad|calf|romanian)/.test(name)) targets.push("legs");
+
+  if (targets.length) return Array.from(new Set(targets));
+  if (fallbackSplit === "Chest + triceps") return ["chest", "triceps"];
+  if (fallbackSplit === "Back + biceps") return ["back", "biceps"];
+  if (fallbackSplit === "Legs") return ["legs"];
+  return ["chest"];
+}
+
+function clampScore(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function avatarForm(score: number) {
+  if (score >= 85) return { form: "Champion Form", nextForm: null };
+  if (score >= 65) return { form: "Hero Form", nextForm: "Champion Form" };
+  if (score >= 45) return { form: "Warrior Form", nextForm: "Hero Form" };
+  if (score >= 25) return { form: "Apprentice Form", nextForm: "Warrior Form" };
+  return { form: "Rookie Form", nextForm: "Apprentice Form" };
 }

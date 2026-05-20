@@ -16,10 +16,12 @@ import Link from "next/link";
 import { AppShell } from "@/components/app-shell";
 import { useFitQuest } from "@/components/app-provider";
 import { RunningProgressChart, StrengthVolumeChart, WeeklyCompletionChart } from "@/components/charts";
+import { QuestAvatarCard } from "@/components/quest-avatar";
 import { BadgePill, Card, MetricCard, PrimaryButton, ProgressBar, SectionTitle, SecondaryButton } from "@/components/ui";
 import {
   buildPartnerSummary,
   calculatePersonalRecords,
+  calculateQuestAvatarStats,
   formatDuration,
   generateCoachingSummary,
   getEarnedBadges,
@@ -53,6 +55,13 @@ export function DashboardPage() {
   const partnerSummary = buildPartnerSummary(state, profile.id);
   const coaching = generateCoachingSummary(profile, state);
   const weeklyCompletionValue = weeklyCompletion(state.tasks, profile.id);
+  const avatarStats = calculateQuestAvatarStats({
+    profile,
+    workouts,
+    exercises,
+    runs,
+    badgeCount: badges.length,
+  });
 
   return (
     <AppShell>
@@ -113,6 +122,10 @@ export function DashboardPage() {
           icon={Coins}
           tone="rose"
         />
+      </div>
+
+      <div className="mt-6">
+        <QuestAvatarCard stats={avatarStats} />
       </div>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">

@@ -172,8 +172,9 @@ export function FamilyPage() {
           <Card>
             <h2 className="text-xl font-semibold">Relative strength index</h2>
             <p className="mt-2 text-sm leading-6 text-zinc-600">
-              This normalizes each person&apos;s top three estimated lifts by bodyweight, then
-              applies a simple age adjustment. It is a family-only index, not a raw lift comparison.
+              This normalizes each person&apos;s top three weighted lift equivalents by bodyweight,
+              then applies a simple age adjustment. Dumbbell, machine, and barbell movements use
+              different multipliers so raw kilograms are not compared directly.
             </p>
             <div className="mt-4">
               <RelativeStrengthChart data={relativeStrengthData} />
@@ -217,7 +218,8 @@ export function FamilyPage() {
           <p className="text-sm leading-6 text-zinc-700">
             Family mode keeps raw lift numbers, calories, protein, alcohol logs, and full workout
             logs private. The relative strength chart shares only a normalized age/bodyweight
-            index so the comparison is less sensitive than direct lift numbers.
+            index with exercise-type weighting, so the comparison is less sensitive than direct
+            lift numbers.
           </p>
         </div>
       </Card>

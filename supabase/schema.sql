@@ -399,21 +399,37 @@ as $$
       else '120+ kg'
     end as weight_class,
     coalesce((
-      select round((sum(top_lifts.best_1rm) / nullif(p.body_weight_kg, 0)) * 100, 1)
+      select round((sum(top_lifts.best_weighted_1rm) / nullif(p.body_weight_kg, 0)) * 100, 1)
       from (
-        select max(se.estimated_1rm) as best_1rm
+        select max(
+          se.estimated_1rm *
+          case
+            when lower(se.exercise_name) ~ '(dumbbell|db)' and lower(se.exercise_name) like '%incline%' then 1.9
+            when lower(se.exercise_name) ~ '(fly|lateral|raise|curl|extension|pushdown)' then 2.1
+            when lower(se.exercise_name) ~ '(dumbbell|db)' then 1.75
+            when lower(se.exercise_name) like '%leg press%' then 0.48
+            when lower(se.exercise_name) like '%deadlift%' then 0.78
+            when lower(se.exercise_name) like '%squat%' then 0.82
+            when lower(se.exercise_name) ~ '(pulldown|machine|cable)' then 0.82
+            when lower(se.exercise_name) like '%incline%' then 1.14
+            when lower(se.exercise_name) like '%bench%' then 1
+            when lower(se.exercise_name) like '%row%' then 1.05
+            when lower(se.exercise_name) like '%press%' then 1.08
+            else 1
+          end
+        ) as best_weighted_1rm
         from public.strength_workouts sw
         join public.strength_exercises se on se.workout_id = sw.id
         where sw.user_id = p.id
           and se.is_bodyweight = false
         group by lower(se.exercise_name)
-        order by max(se.estimated_1rm) desc
+        order by best_weighted_1rm desc
         limit 3
       ) top_lifts
     ), 0) as relative_strength_index,
     coalesce((
       select round(
-        ((sum(top_lifts.best_1rm) / nullif(p.body_weight_kg, 0)) * 100)
+        ((sum(top_lifts.best_weighted_1rm) / nullif(p.body_weight_kg, 0)) * 100)
         * case
             when p.age >= 70 then 1.42
             when p.age >= 60 then 1.28
@@ -424,13 +440,29 @@ as $$
         1
       )
       from (
-        select max(se.estimated_1rm) as best_1rm
+        select max(
+          se.estimated_1rm *
+          case
+            when lower(se.exercise_name) ~ '(dumbbell|db)' and lower(se.exercise_name) like '%incline%' then 1.9
+            when lower(se.exercise_name) ~ '(fly|lateral|raise|curl|extension|pushdown)' then 2.1
+            when lower(se.exercise_name) ~ '(dumbbell|db)' then 1.75
+            when lower(se.exercise_name) like '%leg press%' then 0.48
+            when lower(se.exercise_name) like '%deadlift%' then 0.78
+            when lower(se.exercise_name) like '%squat%' then 0.82
+            when lower(se.exercise_name) ~ '(pulldown|machine|cable)' then 0.82
+            when lower(se.exercise_name) like '%incline%' then 1.14
+            when lower(se.exercise_name) like '%bench%' then 1
+            when lower(se.exercise_name) like '%row%' then 1.05
+            when lower(se.exercise_name) like '%press%' then 1.08
+            else 1
+          end
+        ) as best_weighted_1rm
         from public.strength_workouts sw
         join public.strength_exercises se on se.workout_id = sw.id
         where sw.user_id = p.id
           and se.is_bodyweight = false
         group by lower(se.exercise_name)
-        order by max(se.estimated_1rm) desc
+        order by best_weighted_1rm desc
         limit 3
       ) top_lifts
     ), 0) as age_adjusted_strength_index,

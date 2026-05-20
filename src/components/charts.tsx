@@ -142,7 +142,7 @@ export function RelativeStrengthChart({
             contentStyle={{ borderRadius: 8, borderColor: "#d4d4d8" }}
             formatter={(value, name) => [
               value,
-              name === "relativeStrength" ? "Bodyweight index" : "Age-adjusted index",
+              name === "relativeStrength" ? "Weighted bodyweight index" : "Weighted age-adjusted index",
             ]}
             labelFormatter={(label, payload) => {
               const item = payload?.[0]?.payload;

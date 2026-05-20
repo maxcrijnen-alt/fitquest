@@ -31,7 +31,7 @@ The simplest MVP hosting setup is Vercel + Supabase.
 
 1. Push this `fitquest` folder to a GitHub repository.
 2. Create a Supabase project.
-3. Run the full contents of `supabase/schema.sql` in the Supabase SQL editor. If you already ran an older version, run the latest file again so the onboarding and invite-code changes are added.
+3. Run the full contents of `supabase/schema.sql` in the Supabase SQL editor. If you already ran an older version, run the latest file again so the onboarding, invite-code, and weighted relative-strength changes are added.
 4. Optional: run `supabase/seed.sql` for demo baseline data. The seed starts both users at 0 XP, level 1, 0 coins, and no earned badges.
 5. In Supabase Auth settings, add your deployed Vercel URL to the allowed redirect URLs.
 6. Create a Vercel project from the GitHub repository.
@@ -64,13 +64,14 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 4. Add the Supabase URL and anon key to `.env.local`.
 5. Restart the Next.js dev server.
 
-If the app was already connected to Supabase before the invite-code update, rerun the latest `supabase/schema.sql`. The current schema adds:
+If the app was already connected to Supabase before the latest updates, rerun the latest `supabase/schema.sql`. The current schema adds:
 
 - `profiles.onboarding_completed`
 - nullable pending invite receivers in `partner_connections`
 - `accept_partner_invite(...)`
 - the privacy-safe partner summary RPC used by the family dashboard
 - explicit API grants for authenticated Supabase users
+- weighted relative-strength scoring inside the partner summary RPC
 
 The schema creates these MVP tables:
 
@@ -98,7 +99,7 @@ RLS is enabled across the app tables.
 - Partners can read connection records involving themselves.
 - Detailed strength, running, nutrition, and alcohol logs are not exposed to partners.
 - Partner summaries are served through `get_partner_summaries()`, which returns only gamified summary fields.
-- Relative strength is shown as a normalized age/bodyweight score, not as exact partner workout logs.
+- Relative strength is shown as a weighted, normalized age/bodyweight score, not as exact partner workout logs.
 
 ## MVP Features
 
@@ -108,13 +109,14 @@ RLS is enabled across the app tables.
 - Invite-code family connection flow for real accounts
 - Onboarding for name, nickname, goals, gym level, running level, targets, alcohol goal, and workout split
 - Dashboard with tasks, XP, level, streak, coins, badges, PRs, charts, lifestyle summary, partner summary, and coaching
+- Quest Avatar that evolves from training history, including body parts trained most often
 - Strength logging with volume, estimated 1RM, and PR calculations
 - Running logs with pace, best 5K estimate, weekly volume, and 5K progress
 - Lifestyle logs for calories, protein, water, and alcohol-free days
 - Dynamic daily tasks based on user profile and recent history
 - XP, levels, coins, streaks, badges, and a custom rewards shop
 - Family dashboard with safe gamified comparisons only
-- Family relative strength graph using age and bodyweight class normalization
+- Family relative strength graph using age, bodyweight class, and exercise-type weighting
 - Rule-based weekly coaching
 
 ## Demo Accounts
